@@ -93,15 +93,22 @@ async function initEngine() {
 // Video Input
 // ─────────────────────────────────────────────
 function setupVideoInput() {
-  els.videoInputArea.addEventListener('click', () => {
-    els.videoFile.click();
-  });
-
+  // 앨범 선택
   els.videoFile.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
     loadVideo(file);
   });
+
+  // 카메라 촬영
+  const cameraFile = document.getElementById('cameraFile');
+  if (cameraFile) {
+    cameraFile.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      loadVideo(file);
+    });
+  }
 
   els.btnChangeVideo.addEventListener('click', () => {
     els.videoFile.click();

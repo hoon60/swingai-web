@@ -622,10 +622,14 @@
       <div class="card-title">영상 선택</div>
       <div class="video-input-area" id="videoInputArea">
         <div class="video-input-icon">🎥</div>
-        <div class="video-input-text">탭하여 영상을 선택하세요</div>
-        <div class="video-input-sub">갤러리에서 선택 또는 카메라 촬영</div>
+        <div class="video-input-text">영상을 선택하세요</div>
+        <div style="display:flex;gap:10px;margin-top:12px;justify-content:center;flex-wrap:wrap;">
+          <label for="videoFile" style="display:inline-flex;align-items:center;gap:6px;padding:12px 24px;background:#1565c0;color:#fff;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;">📁 앨범에서 선택</label>
+          <label for="cameraFile" style="display:inline-flex;align-items:center;gap:6px;padding:12px 24px;background:#666;color:#fff;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;">📷 카메라 촬영</label>
+        </div>
       </div>
-      <input type="file" id="videoFile" accept=".mp4,.mov,.avi,.mkv,.webm,video/mp4,video/quicktime,video/x-msvideo">
+      <input type="file" id="videoFile" accept=".mp4,.mov,.avi,.mkv,.webm,video/mp4,video/quicktime" style="display:none;">
+      <input type="file" id="cameraFile" accept="video/*" capture="environment" style="display:none;">
       <video id="videoPreview" controls playsinline></video>
       <div class="video-controls" id="videoControls">
         <button class="btn btn-sm btn-outline" id="btnChangeVideo">영상 변경</button>
