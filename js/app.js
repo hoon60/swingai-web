@@ -97,6 +97,14 @@ function setupVideoInput() {
   els.videoFile.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    // 영상 파일 검증
+    const validTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo', 'video/3gpp'];
+    const validExts = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.3gp'];
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+    if (!file.type.startsWith('video/') && !validExts.includes(ext)) {
+      alert('영상 파일만 선택해주세요. (MP4, MOV, WebM 등)');
+      return;
+    }
     loadVideo(file);
   });
 
