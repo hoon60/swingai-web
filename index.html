@@ -564,6 +564,37 @@
     }
     .toast.visible { transform: translateX(-50%) translateY(0); }
 
+    /* Skeleton Legend */
+    .skeleton-legend {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 8px;
+    }
+    .skeleton-legend span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .skeleton-legend .dot {
+      display: inline-block;
+      width: 10px;
+      height: 3px;
+      border-radius: 2px;
+    }
+    .skeleton-legend .dot.green { background: #00ff00; }
+    .skeleton-legend .dot.orange { background: #ff9900; }
+    .skeleton-legend .dot.red { background: #ff3333; }
+
+    /* Feedback Rating */
+    .feedback-rate-btn:hover {
+      background: rgba(21, 101, 192, 0.08) !important;
+      border-color: var(--primary) !important;
+      transform: scale(1.1);
+    }
+
     /* Responsive */
     @media (max-width: 400px) {
       .container { padding: 8px; }
@@ -697,6 +728,11 @@
         </div>
       </div>
 
+      <!-- Skeleton Overlay (Feature 4) -->
+      <div class="card" id="skeletonContainer" style="display:none;">
+        <div class="card-title">포즈 골격 분석</div>
+      </div>
+
       <!-- Tempo -->
       <div class="card">
         <div class="card-title">템포 분석</div>
@@ -740,6 +776,7 @@
               <th>나</th>
               <th>프로</th>
               <th>차이</th>
+              <th>이전 대비</th>
               <th>상태</th>
             </tr>
           </thead>

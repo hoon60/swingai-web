@@ -17,6 +17,64 @@ let analysisResult = null;
 let activePhase = 'address';
 
 // ─────────────────────────────────────────────
+// History Manager (localStorage)
+// ─────────────────────────────────────────────
+const HISTORY_KEY = 'swingai_history';
+const MAX_HISTORY = 10;
+
+function saveAnalysisHistory(result) {
+  try {
+    const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    const keyMetrics = {};
+    // address, backswing_top, impact의 주요 지표값 수집
+    for (const phase of ['address', 'backswing_top', 'impact']) {
+      const rel = result.relative_metrics[phase];
+      if (!rel) continue;
+      for (const [key, info] of Object.entries(rel)) {
+        if (info.value != null && !['unreliable', '2D_limited', 'no_baseline'].includes(info.status)) {
+          keyMetrics[key] = info.value;
+        }
+      }
+    }
+
+    const entry = {
+      date: new Date().toISOString().slice(0, 10),
+      club: result.metadata.club,
+      level: result.user_level?.level || 'intermediate',
+      avgDiffPct: result.user_level?.avg_diff_pct || 0,
+      keyMetrics,
+      concern: result.metadata.concern,
+    };
+
+    history.unshift(entry);
+    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {
+    console.warn('히스토리 저장 실패:', e);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Feedback Rating Manager
+// ─────────────────────────────────────────────
+const RATING_KEY = 'swingai_feedback_ratings';
+
+function saveFeedbackRating(rating) {
+  try {
+    const ratings = JSON.parse(localStorage.getItem(RATING_KEY) || '[]');
+    ratings.push({
+      date: new Date().toISOString(),
+      rating, // 'up' or 'down'
+    });
+    // 최근 20건만 유지
+    if (ratings.length > 20) ratings.splice(0, ratings.length - 20);
+    localStorage.setItem(RATING_KEY, JSON.stringify(ratings));
+  } catch (e) {
+    console.warn('평가 저장 실패:', e);
+  }
+}
+
+// ─────────────────────────────────────────────
 // DOM References
 // ─────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -270,6 +328,9 @@ async function runAnalysis() {
 
     renderResults(analysisResult);
 
+    // 히스토리 저장
+    saveAnalysisHistory(analysisResult);
+
     // Step 4: AI 피드백 (비동기)
     // API 키: 사용자 설정 우선, 없으면 기본 키
     const _k = [77,89,65,117,108,65,92,73,115,70,110,125,102,109,127,115,111,96,127,28,114,66,65,124,125,109,78,83,72,25,108,115,126,83,109,29,28,110,91,93,72,82,104,70,70,18,71,77,99,88,28,127,27,88,92,25];
@@ -326,6 +387,9 @@ function renderResults(result) {
   els.detectedView.textContent = viewMap[result.metadata.camera_view] || result.metadata.camera_view;
   els.detectedClub.textContent = clubMap[result.metadata.club] || result.metadata.club;
 
+  // Skeleton overlay (Feature 4)
+  renderSkeletonOverlay(result);
+
   // Tempo
   renderTempo(result.tempo);
 
@@ -339,6 +403,9 @@ function renderResults(result) {
 
   // Injury warnings
   renderInjuries(result.injuries);
+
+  // Feedback rating buttons
+  renderFeedbackRating();
 
   // Scroll to results
   setTimeout(() => {
@@ -392,9 +459,12 @@ function setupPhaseTabs(result) {
 function renderMetricsTable(result, phase) {
   const relative = result.relative_metrics[phase];
   if (!relative) {
-    els.metricsBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;">데이터 없음</td></tr>';
+    els.metricsBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">데이터 없음</td></tr>';
     return;
   }
+
+  const baseline = (result.personal_baseline || {})[phase] || {};
+  const hasBaseline = Object.keys(baseline).length > 0;
 
   const rows = [];
   for (const [key, info] of Object.entries(relative)) {
@@ -411,6 +481,18 @@ function renderMetricsTable(result, phase) {
     if (info.status === '2D_limited') diffStr = '-';
     if (info.status === 'unreliable') diffStr = '-';
 
+    // 이전 대비 (Feature 2)
+    let prevStr = '-';
+    const bInfo = baseline[key];
+    if (bInfo) {
+      const dirMap = {
+        improved:  '<span style="color:#2e7d32;font-weight:600;">↑개선</span>',
+        worsened:  '<span style="color:#c62828;font-weight:600;">↓악화</span>',
+        same:      '<span style="color:#757575;">→유지</span>',
+      };
+      prevStr = dirMap[bInfo.direction] || '-';
+    }
+
     const statusDot = `<span class="status-dot ${info.status}"></span>`;
     const statusText = {
       normal: '정상', caution: '주의', warning: '경고',
@@ -423,6 +505,7 @@ function renderMetricsTable(result, phase) {
         <td>${myVal}</td>
         <td>${proVal}</td>
         <td>${diffStr}</td>
+        <td>${prevStr}</td>
         <td>${statusDot}${statusText[info.status] || '-'}</td>
       </tr>
     `);
@@ -551,6 +634,212 @@ function renderRadarChart(result) {
     const y = cy + labelR * Math.sin(angle);
     ctx.fillText(metrics[i].label, x, y + 4);
   }
+}
+
+// ─────────────────────────────────────────────
+// Skeleton Overlay (Feature 4)
+// ─────────────────────────────────────────────
+const SKELETON_CONNECTIONS = [
+  [11, 13], [13, 15], // 왼팔 (어깨-팔꿈치-손목)
+  [12, 14], [14, 16], // 오른팔
+  [11, 12],           // 어깨
+  [11, 23], [12, 24], // 몸통 (어깨-힙)
+  [23, 24],           // 힙
+  [23, 25], [25, 27], // 왼다리 (힙-무릎-발목)
+  [24, 26], [26, 28], // 오른다리
+];
+
+// 골격 부위별 연관 지표
+const CONNECTION_METRICS = {
+  '11-13': 'left_arm_deg', '13-15': 'left_arm_deg',
+  '12-14': 'left_arm_deg', '14-16': 'left_arm_deg',
+  '11-23': 'spine_angle_deg', '12-24': 'spine_angle_deg',
+  '23-25': 'left_knee_flex_deg', '25-27': 'left_knee_flex_deg',
+  '24-26': 'left_knee_flex_deg', '26-28': 'left_knee_flex_deg',
+  '11-12': 'shoulder_line_tilt_deg',
+  '23-24': 'hip_line_tilt_deg',
+};
+
+function getConnectionColor(a, b, phaseRelative) {
+  const key = `${Math.min(a,b)}-${Math.max(a,b)}`;
+  const metric = CONNECTION_METRICS[key];
+  if (!metric || !phaseRelative || !phaseRelative[metric]) return '#00ff00';
+
+  const status = phaseRelative[metric].status;
+  if (status === 'warning') return '#ff3333';
+  if (status === 'caution') return '#ff9900';
+  return '#00ff00';
+}
+
+function drawSkeleton(canvas, landmarks, phaseRelative) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // 골격선
+  ctx.lineWidth = 3;
+  for (const [a, b] of SKELETON_CONNECTIONS) {
+    const la = landmarks[a];
+    const lb = landmarks[b];
+    if (!la || !lb) continue;
+    if ((la.visibility || 0) < 0.3 || (lb.visibility || 0) < 0.3) continue;
+
+    ctx.strokeStyle = getConnectionColor(a, b, phaseRelative);
+    ctx.beginPath();
+    ctx.moveTo(la.x * w, la.y * h);
+    ctx.lineTo(lb.x * w, lb.y * h);
+    ctx.stroke();
+  }
+
+  // 관절점
+  for (const idx of [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
+    const lm = landmarks[idx];
+    if (!lm || (lm.visibility || 0) < 0.3) continue;
+    ctx.beginPath();
+    ctx.arc(lm.x * w, lm.y * h, 4, 0, 2 * Math.PI);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+function renderSkeletonOverlay(result) {
+  const container = $('skeletonContainer');
+  if (!container) return;
+
+  const keyFrames = result.key_frame_landmarks;
+  if (!keyFrames || Object.keys(keyFrames).length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'block';
+  container.innerHTML = '';
+
+  const video = els.videoPreview;
+  const phaseLabels = {
+    address: '어드레스',
+    backswing_top: '백스윙 탑',
+    impact: '임팩트',
+  };
+
+  const phaseOrder = ['address', 'backswing_top', 'impact'];
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;gap:8px;overflow-x:auto;padding:4px 0;';
+
+  for (const phase of phaseOrder) {
+    const kf = keyFrames[phase];
+    if (!kf) continue;
+
+    const item = document.createElement('div');
+    item.style.cssText = 'flex:1;min-width:0;text-align:center;';
+
+    const label = document.createElement('div');
+    label.textContent = phaseLabels[phase] || phase;
+    label.style.cssText = 'font-size:12px;font-weight:600;color:var(--primary);margin-bottom:4px;';
+    item.appendChild(label);
+
+    const canvas = document.createElement('canvas');
+    const canvasW = Math.min(180, video.videoWidth || 320);
+    const canvasH = Math.round(canvasW * (video.videoHeight || 240) / (video.videoWidth || 320));
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    canvas.style.cssText = 'width:100%;border-radius:8px;background:#1a1a1a;';
+    item.appendChild(canvas);
+
+    wrapper.appendChild(item);
+
+    // 비디오에서 해당 프레임 캡처 후 골격 그리기
+    const ctx = canvas.getContext('2d');
+    const frameTime = kf.time;
+    const landmarks = kf.landmarks;
+    const phaseRelative = (result.relative_metrics || {})[phase] || {};
+
+    // 비동기로 프레임 캡처
+    captureFrameAndDraw(video, frameTime, canvas, landmarks, phaseRelative);
+  }
+
+  container.appendChild(wrapper);
+
+  // 범례
+  const legend = document.createElement('div');
+  legend.className = 'skeleton-legend';
+  legend.innerHTML = `
+    <span><span class="dot green"></span>정상</span>
+    <span><span class="dot orange"></span>주의</span>
+    <span><span class="dot red"></span>경고</span>
+  `;
+  container.appendChild(legend);
+}
+
+async function captureFrameAndDraw(video, time, canvas, landmarks, phaseRelative) {
+  const ctx = canvas.getContext('2d');
+  const origTime = video.currentTime;
+  const wasPaused = video.paused;
+
+  try {
+    video.currentTime = time;
+    await new Promise((resolve) => {
+      const handler = () => { video.removeEventListener('seeked', handler); resolve(); };
+      video.addEventListener('seeked', handler);
+    });
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // 약간 어둡게 해서 골격선이 잘 보이게
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawSkeleton(canvas, landmarks, phaseRelative);
+  } catch (e) {
+    console.warn('프레임 캡처 실패:', e);
+    // 프레임 캡처 실패 시 검은 배경에 골격만 그리기
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawSkeleton(canvas, landmarks, phaseRelative);
+  }
+
+  // 원래 위치로 복원
+  video.currentTime = origTime;
+}
+
+// ─────────────────────────────────────────────
+// Feedback Rating (Feature 3)
+// ─────────────────────────────────────────────
+function renderFeedbackRating() {
+  // 기존 rating 요소가 있으면 제거
+  const existing = $('feedbackRating');
+  if (existing) existing.remove();
+
+  const container = document.createElement('div');
+  container.id = 'feedbackRating';
+  container.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;margin-top:16px;padding:12px;background:#f5f5f5;border-radius:8px;';
+
+  container.innerHTML = `
+    <span style="font-size:13px;color:var(--text-secondary);">이 피드백이 도움이 되었나요?</span>
+    <button class="feedback-rate-btn" data-rating="up" style="background:none;border:1.5px solid #e0e0e0;border-radius:8px;padding:6px 16px;cursor:pointer;font-size:18px;transition:all 0.2s;">👍</button>
+    <button class="feedback-rate-btn" data-rating="down" style="background:none;border:1.5px solid #e0e0e0;border-radius:8px;padding:6px 16px;cursor:pointer;font-size:18px;transition:all 0.2s;">👎</button>
+  `;
+
+  const feedbackCard = $('feedbackContent')?.closest('.card');
+  if (feedbackCard) {
+    feedbackCard.appendChild(container);
+  }
+
+  // 이벤트 바인딩
+  container.querySelectorAll('.feedback-rate-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const rating = btn.dataset.rating;
+      saveFeedbackRating(rating);
+
+      // UI 반응
+      container.innerHTML = `<span style="font-size:13px;color:var(--success);font-weight:600;">
+        ${rating === 'up' ? '감사합니다! 다음에도 비슷한 스타일로 피드백하겠습니다.' : '감사합니다! 다음에는 더 나은 피드백을 드리겠습니다.'}
+      </span>`;
+    });
+  });
 }
 
 // ─────────────────────────────────────────────

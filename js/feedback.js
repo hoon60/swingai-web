@@ -110,12 +110,82 @@ const LEVEL_INSTRUCTION = {
 };
 
 /**
+ * 히스토리 기반 프롬프트 섹션 생성
+ */
+function buildHistorySection() {
+  try {
+    const raw = localStorage.getItem('swingai_history');
+    if (!raw) return '';
+    const history = JSON.parse(raw);
+    if (!Array.isArray(history) || history.length === 0) return '';
+
+    const lines = ['## 이전 분석 히스토리'];
+    const today = new Date();
+    for (const entry of history) {
+      const entryDate = new Date(entry.date);
+      const diffDays = Math.round((today - entryDate) / (1000 * 60 * 60 * 24));
+      const clubKr = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' }[entry.club] || entry.club;
+      const levelKr = { beginner: '입문', intermediate: '중급', advanced: '상급' }[entry.level] || entry.level;
+      lines.push(`- ${diffDays}일 전: ${clubKr}, ${levelKr} (프로 대비 평균 차이 ${entry.avgDiffPct}%)`);
+    }
+
+    // 개선 추세 분석
+    if (history.length >= 2) {
+      const recent = history[0].avgDiffPct;
+      const older = history[history.length - 1].avgDiffPct;
+      if (recent < older) {
+        lines.push('→ 최근 개선 추세입니다.');
+      } else if (recent > older) {
+        lines.push('→ 최근 수치가 벌어지고 있습니다. 원인을 짚어주세요.');
+      } else {
+        lines.push('→ 큰 변화 없이 유지 중입니다.');
+      }
+    }
+    lines.push('');
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 피드백 평가 기반 스타일 지시 생성
+ */
+function buildFeedbackStyleSection() {
+  try {
+    const raw = localStorage.getItem('swingai_feedback_ratings');
+    if (!raw) return '';
+    const ratings = JSON.parse(raw);
+    if (!Array.isArray(ratings) || ratings.length === 0) return '';
+
+    const recent = ratings.slice(-5);
+    const upCount = recent.filter(r => r.rating === 'up').length;
+    const downCount = recent.filter(r => r.rating === 'down').length;
+
+    if (downCount > upCount) {
+      return '\n[피드백 스타일 지시] 사용자가 이전 피드백에 불만족했습니다. 이전과 다른 관점에서 더 구체적이고 실용적인 피드백을 제공하세요.\n';
+    } else if (upCount > 0) {
+      return '\n[피드백 스타일 지시] 사용자가 이전 피드백에 만족했습니다. 비슷한 스타일로 피드백하되, 새로운 인사이트를 추가하세요.\n';
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 사용자 프롬프트 생성
  */
 function buildUserPrompt(analysisResult, concern) {
   const config = CONCERN_CONFIG[concern] || CONCERN_CONFIG.distance;
   const focus = config.focus;
   const parts = [];
+
+  // 히스토리 섹션 추가
+  const historySection = buildHistorySection();
+  if (historySection) {
+    parts.push(historySection);
+  }
 
   const meta = analysisResult.metadata || {};
   parts.push('## 분석 정보');
@@ -207,6 +277,7 @@ export async function generateFeedback(analysisResult, options = {}) {
   let systemPrompt = config.system_prompt;
   systemPrompt += '\n답변은 한국어로, 아마추어 골퍼가 이해하기 쉽게 작성하세요.';
   systemPrompt += LEVEL_INSTRUCTION[level] || LEVEL_INSTRUCTION.intermediate;
+  systemPrompt += buildFeedbackStyleSection();
 
   systemPrompt += (
     "\n\n[절대 규칙]" +

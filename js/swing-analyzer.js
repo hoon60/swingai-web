@@ -655,9 +655,29 @@ export class SwingAnalyzer {
     // 종합 점수
     const overallScore = this.computeOverallScore(relativeMetrics);
 
+    // 개인 베이스라인 비교
+    const personalBaseline = this.computePersonalBaseline(relativeMetrics);
+
     // 감지율
     const detectedCount = frames.filter(f => f.landmarks !== null).length;
     const detectionRate = +((detectedCount / frames.length) * 100).toFixed(1);
+
+    // 핵심 프레임의 landmarks 저장 (스켈레톤 오버레이용)
+    const keyFrameLandmarks = {};
+    const phaseFrameMap = {};
+    for (let i = 0; i < phases.length; i++) {
+      const p = phases[i];
+      if (['address', 'backswing_top', 'impact'].includes(p) && !phaseFrameMap[p]) {
+        if (frames[i] && frames[i].landmarks) {
+          phaseFrameMap[p] = i;
+          keyFrameLandmarks[p] = {
+            landmarks: frames[i].landmarks,
+            frameIndex: frames[i].frameIndex,
+            time: frames[i].time,
+          };
+        }
+      }
+    }
 
     return {
       metadata: {
@@ -673,10 +693,76 @@ export class SwingAnalyzer {
       tempo,
       phase_averages: phaseAverages,
       relative_metrics: relativeMetrics,
+      personal_baseline: personalBaseline,
       injuries,
       user_level: userLevel,
       overall_score: overallScore,
+      key_frame_landmarks: keyFrameLandmarks,
     };
+  }
+
+  /**
+   * 개인 베이스라인 대비 비교 계산
+   * localStorage에 저장된 이전 분석들의 지표 평균과 현재 결과를 비교
+   * @returns {Object} phase -> metric -> { prevAvg, direction, diffPct }
+   */
+  computePersonalBaseline(relativeMetrics) {
+    const comparison = {};
+    try {
+      const raw = localStorage.getItem('swingai_history');
+      if (!raw) return comparison;
+      const history = JSON.parse(raw);
+      if (!Array.isArray(history) || history.length === 0) return comparison;
+
+      // 이전 분석들의 keyMetrics를 수집해서 평균 계산
+      const metricSums = {};
+      const metricCounts = {};
+      for (const entry of history) {
+        if (!entry.keyMetrics) continue;
+        for (const [key, val] of Object.entries(entry.keyMetrics)) {
+          if (val == null) continue;
+          if (!metricSums[key]) { metricSums[key] = 0; metricCounts[key] = 0; }
+          metricSums[key] += val;
+          metricCounts[key]++;
+        }
+      }
+
+      const prevBaseline = {};
+      for (const key of Object.keys(metricSums)) {
+        prevBaseline[key] = metricSums[key] / metricCounts[key];
+      }
+
+      // 현재 결과와 비교
+      for (const [phase, metrics] of Object.entries(relativeMetrics)) {
+        comparison[phase] = {};
+        for (const [key, info] of Object.entries(metrics)) {
+          if (info.value == null || prevBaseline[key] == null) continue;
+          if (['unreliable', '2D_limited', 'no_baseline'].includes(info.status)) continue;
+
+          const prevAvg = prevBaseline[key];
+          const currentVal = info.value;
+          const proMean = info.pro_mean;
+
+          // 프로 평균 대비 거리가 줄었으면 개선, 늘었으면 악화
+          let direction = 'same'; // →유지
+          if (proMean != null) {
+            const prevDist = Math.abs(prevAvg - proMean);
+            const currDist = Math.abs(currentVal - proMean);
+            const diff = prevDist - currDist;
+            if (diff > 0.5) direction = 'improved';     // ↑개선
+            else if (diff < -0.5) direction = 'worsened'; // ↓악화
+          }
+
+          comparison[phase][key] = {
+            prevAvg: +prevAvg.toFixed(1),
+            direction,
+          };
+        }
+      }
+    } catch {
+      // localStorage 접근 실패 등은 무시
+    }
+    return comparison;
   }
 
   _detectClubFromMetrics(allMetrics) {
