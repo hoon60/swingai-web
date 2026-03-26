@@ -662,6 +662,19 @@
       <input type="file" id="videoFile" style="display:none;">
       <!-- 카메라 input 제거: Android에서 앨범 선택에 카메라 옵션이 이미 포함됨 -->
       <video id="videoPreview" controls playsinline></video>
+      <div id="trimControls" style="display:none;">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <span style="font-size:12px;color:#666;">시작</span>
+          <input type="range" id="trimStart" min="0" max="100" value="0" step="0.1" style="flex:1;">
+          <span id="trimStartLabel" style="font-size:12px;min-width:40px;">0:00</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:#666;">종료</span>
+          <input type="range" id="trimEnd" min="0" max="100" value="100" step="0.1" style="flex:1;">
+          <span id="trimEndLabel" style="font-size:12px;min-width:40px;">0:04</span>
+        </div>
+        <p style="font-size:11px;color:#999;text-align:center;">스윙 구간만 선택하면 더 정확한 분석이 됩니다</p>
+      </div>
       <div class="video-controls" id="videoControls">
         <button class="btn btn-sm btn-outline" id="btnChangeVideo">영상 변경</button>
         <button class="btn btn-sm btn-outline btn-danger" id="btnRemoveVideo">삭제</button>
@@ -813,6 +826,15 @@
             </p>
             <button class="btn btn-outline btn-sm" style="width: auto; margin: 0 auto; display: block;" id="btnSetApiKey">API 키 설정</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Share -->
+      <div class="card" id="shareCard" style="display:none;">
+        <div class="card-title">결과 공유</div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-outline" id="btnSaveImage">📸 이미지 저장</button>
+          <button class="btn btn-sm btn-outline" id="btnShare">📱 공유하기</button>
         </div>
       </div>
 

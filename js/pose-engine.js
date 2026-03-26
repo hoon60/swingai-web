@@ -71,11 +71,14 @@ export class SwingPoseEngine {
    * @returns {Array} 프레임별 결과 [{landmarks, metrics, frameIndex, time}, ...]
    */
   async analyzeVideo(videoElement, options = {}) {
-    const { maxFrames = 90, onProgress, handedness = 'right' } = options;
+    const { maxFrames = 90, onProgress, handedness = 'right', startTime = 0, endTime = null } = options;
 
     const duration = videoElement.duration;
-    const totalFrames = Math.min(maxFrames, Math.max(30, Math.floor(duration * 30)));
-    const step = duration / totalFrames;
+    const actualStart = Math.max(0, startTime);
+    const actualEnd = endTime != null ? Math.min(endTime, duration) : duration;
+    const segmentDuration = actualEnd - actualStart;
+    const totalFrames = Math.min(maxFrames, Math.max(30, Math.floor(segmentDuration * 30)));
+    const step = segmentDuration / totalFrames;
 
     const results = [];
     const canvas = document.createElement('canvas');
@@ -85,7 +88,7 @@ export class SwingPoseEngine {
 
     // 첫 프레임으로 카메라 뷰 사전 판별을 위한 데이터 수집
     for (let i = 0; i < totalFrames; i++) {
-      const time = i * step;
+      const time = actualStart + i * step;
 
       // Seek to frame
       videoElement.currentTime = time;

@@ -117,6 +117,16 @@ const els = {
   settingsModal: $('settingsModal'),
   inputApiKey: $('inputApiKey'),
   toast: $('toast'),
+  // Trim controls
+  trimControls: $('trimControls'),
+  trimStart: $('trimStart'),
+  trimEnd: $('trimEnd'),
+  trimStartLabel: $('trimStartLabel'),
+  trimEndLabel: $('trimEndLabel'),
+  // Share
+  shareCard: $('shareCard'),
+  btnSaveImage: $('btnSaveImage'),
+  btnShare: $('btnShare'),
 };
 
 // ─────────────────────────────────────────────
@@ -217,6 +227,9 @@ function loadVideo(file) {
     els.videoControls.classList.add('visible');
     els.btnAnalyze.disabled = false;
 
+    // 트림 컨트롤 표시
+    showTrimControls(dur);
+
     // 자동 분석 시작 (1초 후)
     setTimeout(() => {
       if (poseEngine && poseEngine.isReady) {
@@ -241,6 +254,7 @@ function removeVideo() {
   els.btnAnalyze.disabled = true;
   els.resultsSection.classList.remove('visible');
   els.videoFile.value = '';
+  hideTrimControls();
 }
 
 // ─────────────────────────────────────────────
@@ -259,6 +273,78 @@ function setupHandedness() {
 function getHandedness() {
   const selected = els.handednessGroup.querySelector('.chip.selected');
   return selected ? selected.dataset.value : 'right';
+}
+
+// ─────────────────────────────────────────────
+// Trim Controls (Feature 5)
+// ─────────────────────────────────────────────
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function setupTrimControls() {
+  const onSliderChange = () => {
+    const video = els.videoPreview;
+    if (!video || !video.duration) return;
+    const dur = video.duration;
+
+    let startPct = parseFloat(els.trimStart.value);
+    let endPct = parseFloat(els.trimEnd.value);
+
+    // 시작이 종료보다 크면 보정
+    if (startPct >= endPct) {
+      if (startPct === parseFloat(els.trimStart.value)) {
+        endPct = Math.min(100, startPct + 0.1);
+        els.trimEnd.value = endPct;
+      } else {
+        startPct = Math.max(0, endPct - 0.1);
+        els.trimStart.value = startPct;
+      }
+    }
+
+    const startSec = (startPct / 100) * dur;
+    const endSec = (endPct / 100) * dur;
+
+    els.trimStartLabel.textContent = formatTime(startSec);
+    els.trimEndLabel.textContent = formatTime(endSec);
+
+    // 슬라이더 조작 시 비디오 미리보기 이동
+    video.currentTime = startSec;
+  };
+
+  els.trimStart.addEventListener('input', onSliderChange);
+  els.trimEnd.addEventListener('input', onSliderChange);
+
+  // 종료 슬라이더 조작 시에는 해당 위치로 이동
+  els.trimEnd.addEventListener('input', () => {
+    const video = els.videoPreview;
+    if (!video || !video.duration) return;
+    const endSec = (parseFloat(els.trimEnd.value) / 100) * video.duration;
+    video.currentTime = endSec;
+  });
+}
+
+function getTrimTimes() {
+  const video = els.videoPreview;
+  if (!video || !video.duration) return { startTime: 0, endTime: null };
+  const dur = video.duration;
+  const startTime = (parseFloat(els.trimStart.value) / 100) * dur;
+  const endTime = (parseFloat(els.trimEnd.value) / 100) * dur;
+  return { startTime, endTime };
+}
+
+function showTrimControls(duration) {
+  els.trimControls.style.display = 'block';
+  els.trimStart.value = 0;
+  els.trimEnd.value = 100;
+  els.trimStartLabel.textContent = formatTime(0);
+  els.trimEndLabel.textContent = formatTime(duration);
+}
+
+function hideTrimControls() {
+  els.trimControls.style.display = 'none';
 }
 
 // ─────────────────────────────────────────────
@@ -298,9 +384,12 @@ async function runAnalysis() {
 
     // Step 1: 포즈 분석
     els.progressStep.textContent = '2/4: 포즈 감지';
+    const { startTime, endTime } = getTrimTimes();
     const { frames, cameraView } = await poseEngine.analyzeVideo(video, {
       maxFrames: 90,
       handedness,
+      startTime,
+      endTime,
       onProgress: (current, total) => {
         const pct = Math.round((current / total) * 100);
         els.progressBar.style.width = `${pct}%`;
@@ -406,6 +495,9 @@ function renderResults(result) {
 
   // Feedback rating buttons
   renderFeedbackRating();
+
+  // Share card
+  if (els.shareCard) els.shareCard.style.display = 'block';
 
   // Scroll to results
   setTimeout(() => {
@@ -859,6 +951,257 @@ function formatFeedback(text) {
 }
 
 // ─────────────────────────────────────────────
+// Share & Save Image (Feature 6)
+// ─────────────────────────────────────────────
+function saveAsImage() {
+  if (!analysisResult) return;
+
+  const r = analysisResult;
+  const lv = r.user_level || {};
+  const score = r.overall_score || 0;
+  const clubMap = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' };
+  const viewMap = { face_on: '정면', down_the_line: '후방' };
+  const lvKr = lv.level_kr || '중급';
+  const clubKr = clubMap[r.metadata.club] || r.metadata.club;
+  const viewKr = viewMap[r.metadata.camera_view] || r.metadata.camera_view;
+
+  // 주요 지표 3개 수집
+  const topMetrics = [];
+  const phases = ['backswing_top', 'address', 'impact'];
+  for (const phase of phases) {
+    const rel = r.relative_metrics[phase];
+    if (!rel) continue;
+    for (const [key, info] of Object.entries(rel)) {
+      if (topMetrics.length >= 3) break;
+      if (info.value != null && !['unreliable', '2D_limited', 'no_baseline'].includes(info.status)) {
+        topMetrics.push({ name: METRIC_NAMES_KR[key] || key, value: info.value, status: info.status });
+      }
+    }
+    if (topMetrics.length >= 3) break;
+  }
+
+  // Canvas로 카드 이미지 생성
+  const canvas = document.createElement('canvas');
+  canvas.width = 600;
+  canvas.height = 400;
+  const ctx = canvas.getContext('2d');
+
+  // 배경
+  const grad = ctx.createLinearGradient(0, 0, 600, 400);
+  grad.addColorStop(0, '#1565c0');
+  grad.addColorStop(1, '#0d47a1');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 600, 400);
+
+  // 카드 영역
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  roundRect(ctx, 30, 30, 540, 340, 16);
+  ctx.fill();
+
+  // 타이틀
+  ctx.fillStyle = '#1565c0';
+  ctx.font = 'bold 22px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('SwingAI 분석 결과', 60, 75);
+
+  // 레벨 뱃지
+  const lvColors = { beginner: '#e3f2fd', intermediate: '#fff3e0', advanced: '#e8f5e9' };
+  const lvTextColors = { beginner: '#1565c0', intermediate: '#ff6f00', advanced: '#2e7d32' };
+  ctx.fillStyle = lvColors[lv.level] || '#fff3e0';
+  roundRect(ctx, 60, 90, 120, 30, 15);
+  ctx.fill();
+  ctx.fillStyle = lvTextColors[lv.level] || '#ff6f00';
+  ctx.font = 'bold 14px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(lvKr, 120, 110);
+
+  // 점수 원
+  ctx.beginPath();
+  ctx.arc(480, 105, 40, 0, 2 * Math.PI);
+  ctx.fillStyle = '#e3f2fd';
+  ctx.fill();
+  ctx.fillStyle = '#1565c0';
+  ctx.font = 'bold 28px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(score), 480, 115);
+  ctx.fillStyle = '#757575';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillText('종합점수', 480, 155);
+
+  // 클럽 / 뷰
+  ctx.fillStyle = '#424242';
+  ctx.font = '14px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`클럽: ${clubKr}  |  뷰: ${viewKr}`, 60, 150);
+
+  // 구분선
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(60, 170);
+  ctx.lineTo(540, 170);
+  ctx.stroke();
+
+  // 주요 지표
+  ctx.fillStyle = '#1565c0';
+  ctx.font = 'bold 15px -apple-system, sans-serif';
+  ctx.fillText('주요 지표', 60, 200);
+
+  topMetrics.forEach((m, i) => {
+    const y = 230 + i * 40;
+    const statusColors = { normal: '#2e7d32', caution: '#f57f17', warning: '#c62828' };
+    ctx.fillStyle = statusColors[m.status] || '#757575';
+    ctx.beginPath();
+    ctx.arc(70, y - 4, 5, 0, 2 * Math.PI);
+    ctx.fill();
+
+    ctx.fillStyle = '#424242';
+    ctx.font = '14px -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(m.name, 85, y);
+    ctx.fillStyle = '#212121';
+    ctx.font = 'bold 14px -apple-system, sans-serif';
+    ctx.textAlign = 'right';
+    const val = typeof m.value === 'number' ? m.value.toFixed(1) : m.value;
+    ctx.fillText(String(val), 540, y);
+  });
+
+  // 워터마크
+  ctx.fillStyle = '#bdbdbd';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('SwingAI v2.0 - AI 골프 스윙 분석', 300, 365);
+
+  // PNG로 저장
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `swingai-result-${new Date().toISOString().slice(0,10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('이미지가 저장되었습니다.');
+  }, 'image/png');
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function getShareUrl() {
+  if (!analysisResult) return window.location.href;
+  const r = analysisResult;
+  const params = new URLSearchParams();
+  params.set('score', r.overall_score || 0);
+  params.set('level', r.user_level?.level || 'intermediate');
+  params.set('club', r.metadata.club || 'driver');
+  params.set('view', r.metadata.camera_view === 'down_the_line' ? 'dtl' : 'fo');
+
+  // 템포
+  if (r.tempo && r.tempo.tempo_ratio != null) {
+    params.set('tr', r.tempo.tempo_ratio);
+  }
+
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+}
+
+function shareResult() {
+  const url = getShareUrl();
+  const r = analysisResult;
+  const lvKr = r?.user_level?.level_kr || '중급';
+  const score = r?.overall_score || 0;
+  const title = 'SwingAI 스윙 분석 결과';
+  const text = `${lvKr} | 종합점수 ${score}점 - SwingAI로 분석한 내 스윙`;
+
+  if (navigator.share) {
+    navigator.share({ title, text, url }).catch(() => {
+      copyToClipboard(url);
+    });
+  } else {
+    copyToClipboard(url);
+  }
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('링크가 복사되었습니다.');
+    }).catch(() => {
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  showToast('링크가 복사되었습니다.');
+}
+
+function setupShareButtons() {
+  els.btnSaveImage?.addEventListener('click', saveAsImage);
+  els.btnShare?.addEventListener('click', shareResult);
+}
+
+// URL 파라미터로 공유된 결과 표시
+function checkSharedResult() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('score')) return;
+
+  const score = parseInt(params.get('score'), 10) || 0;
+  const level = params.get('level') || 'intermediate';
+  const club = params.get('club') || 'driver';
+  const view = params.get('view') === 'dtl' ? 'down_the_line' : 'face_on';
+  const tempoRatio = params.get('tr') ? parseFloat(params.get('tr')) : null;
+
+  const lvMap = { beginner: '초급', intermediate: '중급', advanced: '상급' };
+  const clubMap = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' };
+  const viewMap = { face_on: '정면 (Face On)', down_the_line: '후방 (DTL)' };
+
+  // 간단한 결과 표시
+  els.resultsSection.classList.add('visible');
+
+  const lvClass = level;
+  const lvEmoji = { beginner: '🏌️', intermediate: '⛳', advanced: '🏆' };
+  els.levelBadge.className = `level-badge ${lvClass}`;
+  els.levelBadge.textContent = `${lvEmoji[lvClass] || ''} ${lvMap[level] || '중급'}`;
+
+  els.scoreCircle.textContent = score;
+  els.detectedView.textContent = viewMap[view] || view;
+  els.detectedClub.textContent = clubMap[club] || club;
+
+  if (tempoRatio != null) {
+    els.tempoRatio.textContent = `${tempoRatio}:1`;
+  }
+
+  // 공유된 결과임을 표시
+  const sharedNote = document.createElement('div');
+  sharedNote.style.cssText = 'text-align:center;padding:12px;color:var(--text-secondary);font-size:13px;';
+  sharedNote.textContent = '공유된 분석 결과입니다. 직접 분석하려면 영상을 업로드하세요.';
+  els.resultsSection.insertBefore(sharedNote, els.resultsSection.firstChild);
+}
+
+// ─────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────
 function setupSettings() {
@@ -917,10 +1260,15 @@ function setupReset() {
 document.addEventListener('DOMContentLoaded', () => {
   setupVideoInput();
   setupHandedness();
+  setupTrimControls();
   setupSettings();
   setupReset();
+  setupShareButtons();
 
   els.btnAnalyze.addEventListener('click', runAnalysis);
+
+  // URL 파라미터로 공유된 결과 확인
+  checkSharedResult();
 
   // Register SW
   if ('serviceWorker' in navigator) {
