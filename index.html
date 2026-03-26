@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SwingAI v2 - 골프 스윙 분석</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1565c0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    :root {
+      --primary: #1565c0;
+      --primary-light: #1e88e5;
+      --primary-dark: #0d47a1;
+      --accent: #ff6f00;
+      --bg: #f5f5f5;
+      --card-bg: #ffffff;
+      --text: #212121;
+      --text-secondary: #757575;
+      --success: #2e7d32;
+      --warning: #f57f17;
+      --danger: #c62828;
+      --border: #e0e0e0;
+      --radius: 12px;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+      --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: white;
+      padding: 16px 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: var(--shadow-lg);
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header h1 span { font-size: 12px; opacity: 0.8; font-weight: 400; }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .header-btn {
+      background: rgba(255,255,255,0.15);
+      border: none;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .header-btn:hover { background: rgba(255,255,255,0.25); }
+
+    /* ── Main Container ── */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* ── Video Input ── */
+    .video-input-area {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 32px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .video-input-area:hover {
+      border-color: var(--primary);
+      background: rgba(21, 101, 192, 0.04);
+    }
+    .video-input-area.has-video {
+      border-style: solid;
+      border-color: var(--primary);
+      padding: 0;
+      overflow: hidden;
+    }
+    .video-input-icon { font-size: 48px; margin-bottom: 8px; }
+    .video-input-text { color: var(--text-secondary); font-size: 14px; }
+    .video-input-sub { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
+
+    #videoFile {
+      display: none;
+    }
+
+    #videoPreview {
+      width: 100%;
+      max-height: 400px;
+      display: none;
+      border-radius: var(--radius);
+    }
+
+    .video-controls {
+      display: none;
+      padding: 8px 0;
+      gap: 8px;
+      justify-content: center;
+    }
+    .video-controls.visible { display: flex; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--primary-light));
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-lg);
+    }
+    .btn-sm {
+      padding: 8px 16px;
+      font-size: 13px;
+      width: auto;
+    }
+    .btn-outline {
+      background: transparent;
+      border: 1.5px solid var(--primary);
+      color: var(--primary);
+    }
+    .btn-outline:hover:not(:disabled) {
+      background: rgba(21,101,192,0.06);
+    }
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+
+    /* ── Options ── */
+    .options-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .option-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-secondary);
+    }
+    .option-group select,
+    .option-group input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      background: var(--card-bg);
+      color: var(--text);
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .option-group select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 8L1 3h10z' fill='%23757575'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 32px;
+    }
+
+    /* ── Chip Select (Handedness) ── */
+    .chip-group {
+      display: flex;
+      gap: 8px;
+    }
+    .chip {
+      flex: 1;
+      padding: 10px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      text-align: center;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+      background: var(--card-bg);
+    }
+    .chip.selected {
+      border-color: var(--primary);
+      background: rgba(21, 101, 192, 0.08);
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* ── Progress ── */
+    .progress-section {
+      display: none;
+    }
+    .progress-section.visible { display: block; }
+
+    .progress-bar-container {
+      background: #e3f2fd;
+      border-radius: 8px;
+      overflow: hidden;
+      height: 8px;
+      margin-bottom: 8px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--primary-light));
+      border-radius: 8px;
+      transition: width 0.3s;
+      width: 0%;
+    }
+    .progress-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+    .progress-step {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+      text-align: center;
+    }
+
+    /* ── Results ── */
+    .results-section { display: none; }
+    .results-section.visible { display: block; }
+
+    /* Level Badge */
+    .level-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .level-badge.beginner { background: #e3f2fd; color: var(--primary); }
+    .level-badge.intermediate { background: #fff3e0; color: var(--accent); }
+    .level-badge.advanced { background: #e8f5e9; color: var(--success); }
+
+    /* Score Overview */
+    .score-overview {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 16px;
+      padding: 16px;
+      background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+      border-radius: var(--radius);
+    }
+    .score-circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--primary);
+      box-shadow: 0 2px 8px rgba(21,101,192,0.2);
+    }
+    .score-detail {
+      text-align: left;
+    }
+    .score-detail .label { font-size: 12px; color: var(--text-secondary); }
+    .score-detail .value { font-size: 15px; font-weight: 600; }
+
+    /* Metrics Table */
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .metrics-table th {
+      background: #f5f5f5;
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-bottom: 2px solid var(--border);
+    }
+    .metrics-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .metrics-table tr:last-child td { border-bottom: none; }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+    .status-dot.normal { background: var(--success); }
+    .status-dot.caution { background: var(--warning); }
+    .status-dot.warning { background: var(--danger); }
+    .status-dot.unknown { background: #bdbdbd; }
+
+    /* Radar Chart */
+    .radar-container {
+      display: flex;
+      justify-content: center;
+      padding: 16px 0;
+    }
+    #radarCanvas {
+      max-width: 300px;
+      max-height: 300px;
+    }
+
+    /* Tempo */
+    .tempo-display {
+      display: flex;
+      justify-content: space-around;
+      text-align: center;
+      padding: 12px 0;
+    }
+    .tempo-item .value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    .tempo-item .label {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .tempo-bar {
+      display: flex;
+      height: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 12px 0;
+    }
+    .tempo-bar .backswing {
+      background: var(--primary);
+      transition: width 0.5s;
+    }
+    .tempo-bar .downswing {
+      background: var(--accent);
+      transition: width 0.5s;
+    }
+    .tempo-legend {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .tempo-legend span::before {
+      content: '';
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .tempo-legend .bs::before { background: var(--primary); }
+    .tempo-legend .ds::before { background: var(--accent); }
+
+    /* Injury Warning */
+    .injury-card {
+      background: #fff3e0;
+      border-left: 4px solid var(--warning);
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 8px;
+    }
+    .injury-card.high {
+      background: #ffebee;
+      border-left-color: var(--danger);
+    }
+    .injury-card .title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .injury-card .detail {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* AI Feedback */
+    .feedback-content {
+      font-size: 14px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      word-break: keep-all;
+    }
+    .feedback-content h2,
+    .feedback-content h3 {
+      color: var(--primary);
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+    .feedback-loading {
+      text-align: center;
+      padding: 24px;
+      color: var(--text-secondary);
+    }
+    .feedback-loading .spinner {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Settings Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 200;
+      justify-content: center;
+      align-items: flex-end;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal-content {
+      background: white;
+      width: 100%;
+      max-width: 600px;
+      border-radius: 16px 16px 0 0;
+      padding: 24px;
+      max-height: 80vh;
+      overflow-y: auto;
+      animation: slideUp 0.3s;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to { transform: translateY(0); }
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .modal-header h2 { font-size: 18px; }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      padding: 4px;
+    }
+
+    .api-key-input {
+      width: 100%;
+      padding: 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: monospace;
+      margin-bottom: 8px;
+    }
+    .api-key-hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+    }
+
+    /* Phase tabs */
+    .phase-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .phase-tab {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #f5f5f5;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      border: none;
+      transition: all 0.2s;
+    }
+    .phase-tab.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #323232;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 300;
+      transition: transform 0.3s;
+      box-shadow: var(--shadow-lg);
+    }
+    .toast.visible { transform: translateX(-50%) translateY(0); }
+
+    /* Responsive */
+    @media (max-width: 400px) {
+      .container { padding: 8px; }
+      .card { padding: 16px; }
+      .options-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Init Overlay ── */
+    .init-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255,255,255,0.95);
+      z-index: 150;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .init-overlay.visible { display: flex; }
+    .init-overlay .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .init-overlay .text {
+      font-size: 15px;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <h1>SwingAI <span>v2.0 Web</span></h1>
+    <div class="header-actions">
+      <button class="header-btn" id="btnSettings">설정</button>
+      <button class="header-btn" id="btnReset">초기화</button>
+    </div>
+  </div>
+
+  <!-- Init Overlay -->
+  <div class="init-overlay" id="initOverlay">
+    <div class="spinner"></div>
+    <div class="text" id="initText">AI 엔진 로딩 중...</div>
+  </div>
+
+  <div class="container">
+
+    <!-- Video Input -->
+    <div class="card">
+      <div class="card-title">영상 선택</div>
+      <div class="video-input-area" id="videoInputArea">
+        <div class="video-input-icon">🎥</div>
+        <div class="video-input-text">탭하여 영상을 선택하세요</div>
+        <div class="video-input-sub">갤러리에서 선택 또는 카메라 촬영</div>
+      </div>
+      <input type="file" id="videoFile" accept="video/*" capture="environment">
+      <video id="videoPreview" controls playsinline></video>
+      <div class="video-controls" id="videoControls">
+        <button class="btn btn-sm btn-outline" id="btnChangeVideo">영상 변경</button>
+        <button class="btn btn-sm btn-outline btn-danger" id="btnRemoveVideo">삭제</button>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="card">
+      <div class="card-title">분석 옵션</div>
+      <div class="options-grid">
+        <div class="option-group">
+          <label>고민</label>
+          <select id="selectConcern">
+            <option value="distance">비거리 향상</option>
+            <option value="slice">슬라이스 교정</option>
+            <option value="hook">훅 교정</option>
+            <option value="accuracy">방향성 개선</option>
+            <option value="iron_contact">아이언 미스샷</option>
+            <option value="short_game">쇼트게임</option>
+            <option value="putting">퍼팅</option>
+            <option value="consistency">일관성</option>
+          </select>
+        </div>
+        <div class="option-group">
+          <label>클럽</label>
+          <select id="selectClub">
+            <option value="driver">드라이버</option>
+            <option value="iron">아이언</option>
+            <option value="wedge">웨지</option>
+            <option value="putter">퍼터</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <label style="font-size: 13px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 4px;">손잡이</label>
+        <div class="chip-group" id="handednessGroup">
+          <div class="chip selected" data-value="right">오른손잡이</div>
+          <div class="chip" data-value="left">왼손잡이</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analyze Button -->
+    <button class="btn btn-primary" id="btnAnalyze" disabled>
+      스윙 분석 시작
+    </button>
+
+    <!-- Progress -->
+    <div class="card progress-section" id="progressSection" style="margin-top: 16px;">
+      <div class="progress-bar-container">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="progress-text" id="progressText">준비 중...</div>
+      <div class="progress-step" id="progressStep"></div>
+    </div>
+
+    <!-- Results -->
+    <div class="results-section" id="resultsSection">
+
+      <!-- Level & Score -->
+      <div class="card">
+        <div class="level-badge" id="levelBadge"></div>
+        <div class="score-overview" id="scoreOverview">
+          <div class="score-circle" id="scoreCircle">-</div>
+          <div class="score-detail">
+            <div class="label">카메라 뷰</div>
+            <div class="value" id="detectedView">-</div>
+            <div class="label" style="margin-top: 8px;">감지된 클럽</div>
+            <div class="value" id="detectedClub">-</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tempo -->
+      <div class="card">
+        <div class="card-title">템포 분석</div>
+        <div class="tempo-display" id="tempoDisplay">
+          <div class="tempo-item">
+            <div class="value" id="tempoBackswing">-</div>
+            <div class="label">백스윙</div>
+          </div>
+          <div class="tempo-item">
+            <div class="value" id="tempoDownswing">-</div>
+            <div class="label">다운스윙</div>
+          </div>
+          <div class="tempo-item">
+            <div class="value" id="tempoRatio">-</div>
+            <div class="label">비율</div>
+          </div>
+        </div>
+        <div class="tempo-bar" id="tempoBar">
+          <div class="backswing" style="width: 75%;"></div>
+          <div class="downswing" style="width: 25%;"></div>
+        </div>
+        <div class="tempo-legend">
+          <span class="bs">백스윙</span>
+          <span class="ds">다운스윙</span>
+        </div>
+        <div id="tempoComment" style="font-size: 13px; color: var(--text-secondary); text-align: center; margin-top: 8px;"></div>
+      </div>
+
+      <!-- Metrics Table -->
+      <div class="card">
+        <div class="card-title">프로 대비 분석</div>
+        <div class="phase-tabs" id="phaseTabs">
+          <button class="phase-tab active" data-phase="address">어드레스</button>
+          <button class="phase-tab" data-phase="backswing_top">탑</button>
+          <button class="phase-tab" data-phase="impact">임팩트</button>
+        </div>
+        <table class="metrics-table" id="metricsTable">
+          <thead>
+            <tr>
+              <th>지표</th>
+              <th>나</th>
+              <th>프로</th>
+              <th>차이</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody id="metricsBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Radar Chart -->
+      <div class="card">
+        <div class="card-title">레이더 차트</div>
+        <div class="radar-container">
+          <canvas id="radarCanvas" width="300" height="300"></canvas>
+        </div>
+      </div>
+
+      <!-- Injury Warnings -->
+      <div class="card" id="injurySection" style="display: none;">
+        <div class="card-title" style="color: var(--danger);">부상 위험 경고</div>
+        <div id="injuryList"></div>
+      </div>
+
+      <!-- AI Feedback -->
+      <div class="card">
+        <div class="card-title">AI 코칭 피드백</div>
+        <div id="feedbackContent" class="feedback-content">
+          <div class="feedback-loading" id="feedbackLoading" style="display: none;">
+            <div class="spinner"></div>
+            <div style="margin-top: 8px;">AI가 분석 중입니다...</div>
+          </div>
+          <div id="feedbackText"></div>
+          <div id="feedbackNoKey" style="display: none;">
+            <p style="color: var(--text-secondary); text-align: center; padding: 16px;">
+              AI 피드백을 받으려면 Groq API 키를 설정해주세요.
+            </p>
+            <button class="btn btn-outline btn-sm" style="width: auto; margin: 0 auto; display: block;" id="btnSetApiKey">API 키 설정</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /results-section -->
+  </div><!-- /container -->
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>설정</h2>
+        <button class="modal-close" id="btnCloseSettings">&times;</button>
+      </div>
+      <div class="option-group" style="margin-bottom: 16px;">
+        <label>Groq API 키</label>
+        <input type="password" class="api-key-input" id="inputApiKey" placeholder="gsk_xxxxxxxx...">
+        <div class="api-key-hint">
+          <a href="https://console.groq.com/keys" target="_blank" style="color: var(--primary);">Groq Console</a>에서 무료로 발급받을 수 있습니다.
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnSaveSettings">저장</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
