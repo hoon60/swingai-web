@@ -117,12 +117,34 @@ function loadVideo(file) {
   const url = URL.createObjectURL(file);
   els.videoPreview.src = url;
   els.videoPreview.style.display = 'block';
-  els.videoInputArea.classList.add('has-video');
-  els.videoInputArea.querySelector('.video-input-icon').style.display = 'none';
-  els.videoInputArea.querySelector('.video-input-text').style.display = 'none';
-  els.videoInputArea.querySelector('.video-input-sub').style.display = 'none';
-  els.videoControls.classList.add('visible');
-  els.btnAnalyze.disabled = false;
+
+  // 영상 로드 성공/실패 감지
+  els.videoPreview.onerror = () => {
+    alert('이 영상 형식은 브라우저에서 재생할 수 없습니다.\n\nHEVC(H.265) 코덱은 일부 브라우저에서 지원되지 않습니다.\n\n해결: 영상을 H.264(MP4)로 변환하거나, Safari 브라우저에서 시도해주세요.');
+    removeVideo();
+  };
+
+  els.videoPreview.onloadedmetadata = () => {
+    // 영상 정보 표시
+    const dur = els.videoPreview.duration;
+    const w = els.videoPreview.videoWidth;
+    const h = els.videoPreview.videoHeight;
+    console.log(`[영상 로드] ${w}x${h}, ${dur.toFixed(1)}초, ${(file.size/1024).toFixed(0)}KB`);
+
+    if (dur > 60) {
+      alert(`영상이 ${dur.toFixed(0)}초입니다. 60초 이하의 스윙 영상을 사용해주세요.`);
+      removeVideo();
+      return;
+    }
+
+    els.videoInputArea.classList.add('has-video');
+    els.videoInputArea.querySelector('.video-input-icon').style.display = 'none';
+    els.videoInputArea.querySelector('.video-input-text').style.display = 'none';
+    els.videoInputArea.querySelector('.video-input-sub').style.display = 'none';
+    els.videoControls.classList.add('visible');
+    els.btnAnalyze.disabled = false;
+  };
+
   // 결과 초기화
   els.resultsSection.classList.remove('visible');
 }
