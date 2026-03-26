@@ -140,7 +140,6 @@ function loadVideo(file) {
   };
 
   els.videoPreview.onloadedmetadata = () => {
-    // 영상 정보 표시
     const dur = els.videoPreview.duration;
     const w = els.videoPreview.videoWidth;
     const h = els.videoPreview.videoHeight;
@@ -154,10 +153,18 @@ function loadVideo(file) {
 
     els.videoInputArea.classList.add('has-video');
     els.videoInputArea.querySelector('.video-input-icon').style.display = 'none';
-    els.videoInputArea.querySelector('.video-input-text').style.display = 'none';
-    els.videoInputArea.querySelector('.video-input-sub').style.display = 'none';
+    els.videoInputArea.querySelector('.video-input-text').textContent = '영상 로드 완료';
+    const subEl = els.videoInputArea.querySelector('.video-input-sub');
+    if (subEl) subEl.style.display = 'none';
     els.videoControls.classList.add('visible');
     els.btnAnalyze.disabled = false;
+
+    // 자동 분석 시작 (1초 후)
+    setTimeout(() => {
+      if (poseEngine && poseEngine.isReady) {
+        runAnalysis();
+      }
+    }, 1000);
   };
 
   // 결과 초기화

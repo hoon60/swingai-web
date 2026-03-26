@@ -654,15 +654,8 @@
             <option value="consistency">일관성</option>
           </select>
         </div>
-        <div class="option-group">
-          <label>클럽</label>
-          <select id="selectClub">
-            <option value="driver">드라이버</option>
-            <option value="iron">아이언</option>
-            <option value="wedge">웨지</option>
-            <option value="putter">퍼터</option>
-          </select>
-        </div>
+        <!-- 클럽은 자동 감지 -->
+        <input type="hidden" id="selectClub" value="driver">
       </div>
       <div style="margin-top: 12px;">
         <label style="font-size: 13px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 4px;">손잡이</label>
