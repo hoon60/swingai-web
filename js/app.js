@@ -271,7 +271,14 @@ async function runAnalysis() {
     renderResults(analysisResult);
 
     // Step 4: AI 피드백 (비동기)
-    const apiKey = localStorage.getItem('groq_api_key');
+    let apiKey = localStorage.getItem('groq_api_key');
+    // API 키가 없으면 자동 프롬프트
+    if (!apiKey) {
+      apiKey = prompt('AI 코칭 피드백을 받으려면 Groq API 키를 입력하세요.\n(https://console.groq.com/keys 에서 무료 발급)\n\n한 번만 입력하면 저장됩니다.');
+      if (apiKey && apiKey.startsWith('gsk_')) {
+        localStorage.setItem('groq_api_key', apiKey);
+      }
+    }
     if (apiKey) {
       els.feedbackLoading.style.display = 'block';
       els.feedbackText.textContent = '';

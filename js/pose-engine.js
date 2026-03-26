@@ -331,8 +331,13 @@ export class SwingPoseEngine {
     const avgSpine = spineAngles.length > 0 ?
       spineAngles.reduce((a, b) => a + b, 0) / spineAngles.length : 0;
 
-    if (maxWrist > 0.85 && avgSpine < 38) return 'driver';
-    if (maxWrist > 0.55 || avgSpine < 40) return 'iron';
-    return 'wedge';
+    console.log(`[클럽 감지] maxWrist: ${maxWrist.toFixed(3)}, avgSpine: ${avgSpine.toFixed(1)}`);
+
+    // 드라이버: 높은 백스윙 + 상체 덜 숙임
+    if (maxWrist > 0.7) return 'driver';
+    // 퍼터: 매우 낮은 백스윙
+    if (maxWrist < 0.15) return 'putter';
+    // 나머지는 대부분 아이언 (웨지와 구분 어려움 → 기본 아이언)
+    return 'iron';
   }
 }
