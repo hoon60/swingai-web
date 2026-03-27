@@ -623,8 +623,22 @@ export class SwingAnalyzer {
     const { club = 'driver', handedness = 'right', concern = 'distance' } = options;
     const fps = 30;
 
-    const allMetrics = frames.map(f => f.metrics);
-    const detectedClub = frames[0]?.metrics ?
+    let allMetrics = frames.map(f => f.metrics);
+    let usedFrames = frames;
+
+    // 스윙 구간 자동 감지 (손목 속도 기반)
+    const swingBounds = this.detectSwingBounds(allMetrics, fps);
+    if (swingBounds) {
+      const [start, end] = swingBounds;
+      const trimLen = end - start + 1;
+      if (trimLen >= 15) {
+        console.log(`[스윙 감지] ${start}~${end} (${trimLen} frames)`);
+        usedFrames = frames.slice(start, end + 1);
+        allMetrics = allMetrics.slice(start, end + 1);
+      }
+    }
+
+    const detectedClub = usedFrames[0]?.metrics ?
       this._detectClubFromMetrics(allMetrics) : club;
 
     // 단계 분류
@@ -658,24 +672,35 @@ export class SwingAnalyzer {
     // 개인 베이스라인 비교
     const personalBaseline = this.computePersonalBaseline(relativeMetrics);
 
+    // usedFrames 참조 업데이트 (스윙 구간 트림 반영)
+    frames = usedFrames;
+
     // 감지율
     const detectedCount = frames.filter(f => f.landmarks !== null).length;
     const detectionRate = +((detectedCount / frames.length) * 100).toFixed(1);
 
     // 핵심 프레임의 landmarks 저장 (스켈레톤 오버레이용)
+    // 각 페이즈의 중간 프레임을 선택 (가장 대표적)
     const keyFrameLandmarks = {};
-    const phaseFrameMap = {};
+    const phaseIndices = {};
     for (let i = 0; i < phases.length; i++) {
       const p = phases[i];
-      if (['address', 'backswing_top', 'impact'].includes(p) && !phaseFrameMap[p]) {
+      if (['address', 'backswing_top', 'impact'].includes(p)) {
+        if (!phaseIndices[p]) phaseIndices[p] = [];
         if (frames[i] && frames[i].landmarks) {
-          phaseFrameMap[p] = i;
-          keyFrameLandmarks[p] = {
-            landmarks: frames[i].landmarks,
-            frameIndex: frames[i].frameIndex,
-            time: frames[i].time,
-          };
+          phaseIndices[p].push(i);
         }
+      }
+    }
+    for (const [p, indices] of Object.entries(phaseIndices)) {
+      // 중간 프레임 선택
+      const midIdx = indices[Math.floor(indices.length / 2)];
+      if (frames[midIdx]) {
+        keyFrameLandmarks[p] = {
+          landmarks: frames[midIdx].landmarks,
+          frameIndex: frames[midIdx].frameIndex,
+          time: frames[midIdx].time,
+        };
       }
     }
 
@@ -706,6 +731,88 @@ export class SwingAnalyzer {
    * localStorage에 저장된 이전 분석들의 지표 평균과 현재 결과를 비교
    * @returns {Object} phase -> metric -> { prevAvg, direction, diffPct }
    */
+  /**
+   * 스윙 구간 자동 감지 (손목 속도 기반)
+   * 임팩트 = 손목 이동 속도 최대 지점
+   * 스윙 시작 = 임팩트 전 정지 구간
+   * 스윙 끝 = 임팩트 후 정지 구간
+   */
+  detectSwingBounds(allMetrics, fps) {
+    if (allMetrics.length < 20) return null;
+
+    // 손목 높이 변화(속도) 계산
+    const wristHeights = allMetrics.map(m => (m && m.wrist_height_rel) || 0);
+    const velocities = [];
+    for (let i = 1; i < wristHeights.length; i++) {
+      velocities.push(Math.abs(wristHeights[i] - wristHeights[i - 1]));
+    }
+    velocities.unshift(0);
+
+    // 가우시안 스무딩
+    const smoothed = this._gaussianSmooth(velocities, 5);
+
+    // 임팩트 = 최대 속도
+    let impactIdx = 0;
+    let maxVel = 0;
+    for (let i = 5; i < smoothed.length - 5; i++) {
+      if (smoothed[i] > maxVel) {
+        maxVel = smoothed[i];
+        impactIdx = i;
+      }
+    }
+
+    if (maxVel < 0.005) return null; // 움직임 거의 없음
+
+    const median = [...smoothed].sort((a, b) => a - b)[Math.floor(smoothed.length / 2)];
+    const threshold = median * 0.3;
+
+    // 스윙 시작: 임팩트 역방향 탐색
+    let start = Math.max(0, impactIdx - Math.floor(fps * 0.5));
+    for (let i = impactIdx - 1; i >= 0; i--) {
+      let quietCount = 0;
+      for (let j = i; j >= Math.max(0, i - 4); j--) {
+        if (smoothed[j] < threshold) quietCount++;
+      }
+      if (quietCount >= 3) {
+        start = Math.max(0, i - 2);
+        break;
+      }
+    }
+
+    // 스윙 끝: 임팩트 순방향 탐색
+    let end = Math.min(smoothed.length - 1, impactIdx + Math.floor(fps * 1.5));
+    for (let i = impactIdx + 1; i < smoothed.length; i++) {
+      let quietCount = 0;
+      for (let j = i; j < Math.min(smoothed.length, i + 4); j++) {
+        if (smoothed[j] < threshold) quietCount++;
+      }
+      if (quietCount >= 3) {
+        end = Math.min(smoothed.length - 1, i + 2);
+        break;
+      }
+    }
+
+    return [start, end];
+  }
+
+  _gaussianSmooth(arr, window = 5) {
+    const result = new Array(arr.length);
+    const half = Math.floor(window / 2);
+    for (let i = 0; i < arr.length; i++) {
+      let sum = 0, count = 0;
+      for (let j = -half; j <= half; j++) {
+        const idx = i + j;
+        if (idx >= 0 && idx < arr.length) {
+          const w = Math.exp(-(j * j) / (2 * (half / 2) * (half / 2)));
+          sum += arr[idx] * w;
+          count += w;
+        }
+      }
+      result[i] = sum / count;
+    }
+    return result;
+  }
+
   computePersonalBaseline(relativeMetrics) {
     const comparison = {};
     try {
