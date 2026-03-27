@@ -476,6 +476,9 @@ function renderResults(result) {
   els.detectedView.textContent = viewMap[result.metadata.camera_view] || result.metadata.camera_view;
   els.detectedClub.textContent = clubMap[result.metadata.club] || result.metadata.club;
 
+  // 핵심 개선 포인트 요약
+  renderKeyInsights(result);
+
   // Skeleton overlay (Feature 4)
   renderSkeletonOverlay(result);
 
@@ -503,6 +506,84 @@ function renderResults(result) {
   setTimeout(() => {
     els.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, 200);
+}
+
+function renderKeyInsights(result) {
+  const container = document.getElementById('keyInsights');
+  if (!container) return;
+
+  const insights = [];
+  const METRIC_KR = {
+    spine_angle_deg: '허리 숙임', left_arm_deg: '왼팔 직선도',
+    left_knee_flex_deg: '무릎 각도', wrist_height_rel: '손 높이',
+    weight_dist: '체중 이동',
+  };
+
+  // 가장 문제되는 지표 2~3개 찾기
+  const allMetrics = [];
+  for (const [phase, metrics] of Object.entries(result.relative_metrics || {})) {
+    for (const [key, val] of Object.entries(metrics)) {
+      if (val.status === 'warning' || val.status === 'caution') {
+        allMetrics.push({ phase, key, ...val });
+      }
+    }
+  }
+  // warning 우선, caution 다음
+  allMetrics.sort((a, b) => (a.status === 'warning' ? 0 : 1) - (b.status === 'warning' ? 0 : 1));
+
+  if (allMetrics.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:16px;color:#2e7d32;font-weight:600;">✅ 전반적으로 좋은 스윙입니다! 현재 자세를 유지하세요.</div>';
+    container.style.display = 'block';
+    return;
+  }
+
+  const comments = {
+    left_arm_deg: { caution: '왼팔이 약간 구부러져 있어요', warning: '왼팔을 더 펴면 비거리가 늘어납니다' },
+    left_knee_flex_deg: { caution: '무릎 각도를 조금 조절해보세요', warning: '무릎 자세에 주의가 필요합니다' },
+    wrist_height_rel: { caution: '손 위치를 조금 조절해보세요', warning: '백스윙 시 손을 더 높이 올려보세요' },
+    spine_angle_deg: { caution: '허리 숙임을 약간 조절해보세요', warning: '허리 각도에 주의하세요. 부상 위험' },
+    weight_dist: { caution: '체중 이동을 의식해보세요', warning: '체중 이동이 부족합니다' },
+  };
+
+  let html = '<div style="padding:4px 0;">';
+  const top = allMetrics.slice(0, 3);
+  for (const m of top) {
+    const name = METRIC_KR[m.key] || m.key;
+    const comment = comments[m.key]?.[m.status] || `${name}을(를) 개선해보세요`;
+    const icon = m.status === 'warning' ? '🔴' : '🟡';
+    const diffStr = m.diff_pct != null ? `(프로 대비 ${m.diff_pct > 0 ? '+' : ''}${m.diff_pct.toFixed(0)}%)` : '';
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
+      <span style="font-size:20px;">${icon}</span>
+      <div>
+        <div style="font-weight:600;font-size:14px;">${comment}</div>
+        <div style="font-size:12px;color:#999;">${name} ${diffStr}</div>
+      </div>
+    </div>`;
+  }
+
+  // 강점 찾기
+  const normals = [];
+  for (const [phase, metrics] of Object.entries(result.relative_metrics || {})) {
+    for (const [key, val] of Object.entries(metrics)) {
+      if (val.status === 'normal' && METRIC_KR[key]) {
+        normals.push(key);
+      }
+    }
+  }
+  if (normals.length > 0) {
+    const strengthNames = [...new Set(normals)].slice(0, 2).map(k => METRIC_KR[k]).join(', ');
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;">
+      <span style="font-size:20px;">💪</span>
+      <div>
+        <div style="font-weight:600;font-size:14px;color:#2e7d32;">강점: ${strengthNames}</div>
+        <div style="font-size:12px;color:#999;">프로 수준에 가깝습니다</div>
+      </div>
+    </div>`;
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+  container.style.display = 'block';
 }
 
 function renderTempo(tempo) {

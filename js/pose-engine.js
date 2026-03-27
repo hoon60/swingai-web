@@ -336,11 +336,12 @@ export class SwingPoseEngine {
 
     console.log(`[클럽 감지] maxWrist: ${maxWrist.toFixed(3)}, avgSpine: ${avgSpine.toFixed(1)}`);
 
-    // 드라이버: 높은 백스윙 + 상체 덜 숙임
-    if (maxWrist > 0.7) return 'driver';
-    // 퍼터: 매우 낮은 백스윙
-    if (maxWrist < 0.15) return 'putter';
-    // 나머지는 대부분 아이언 (웨지와 구분 어려움 → 기본 아이언)
+    // 퍼터: 매우 낮은 백스윙 (거의 움직이지 않음)
+    if (maxWrist < 0.1) return 'putter';
+    // 드라이버: 매우 높은 백스윙
+    if (maxWrist > 0.85) return 'driver';
+    // 나머지: 2D에서 아이언/웨지/드라이버 정확한 구분 어려움 → 기본 아이언
+    // (스크린골프 카메라 각도에서 wrist_height가 낮게 측정되는 경향)
     return 'iron';
   }
 }
