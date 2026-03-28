@@ -420,6 +420,8 @@ async function runAnalysis() {
     els.progressText.textContent = '스윙 지표 계산 중...';
 
     analysisResult = analyzer.analyze(frames, cameraView, { club, handedness, concern });
+    window.__lastAnalysis = analysisResult;  // 디버그: 콘솔에서 접근 가능
+    if (analysisResult._debug) console.log('[SwingAI Debug]', JSON.stringify(analysisResult._debug, null, 2));
 
     // ── Layer 1: 수식 모델 결과 학습 저장 ──────────────────
     const phaseIdx = analyzer._lastPhaseIndices;

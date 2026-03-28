@@ -391,16 +391,24 @@ export class SwingAnalyzer {
     const shtDiff = diff(shtS);
 
     // ── 어드레스 감지: 초반 정지 구간 ────────────
-    // 처음 5%~15% 구간에서 움직임이 최소인 연속 프레임을 찾음
+    // DTL: x_factor 노이즈 → wrist height 변화율만 사용
+    // Face-on: x_factor + wrist height 변화율 사용
     const addrEnd = Math.min(
       Math.floor(n * 0.15),
-      (() => {
-        // X-factor가 처음으로 0.5deg/frame 이상 증가하는 시점
-        for (let i = 2; i < Math.floor(n * 0.3); i++) {
-          if ((xfDiff[i] || 0) > 0.5 && (whDiff[i] || 0) > 0.002) return i;
-        }
-        return Math.floor(n * 0.10);
-      })()
+      isDTL
+        ? (() => {
+            // DTL: wrist height가 움직이기 시작하는 지점
+            for (let i = 3; i < Math.floor(n * 0.3); i++) {
+              if ((whDiff[i] || 0) > 0.004) return Math.max(2, i - 1);
+            }
+            return Math.floor(n * 0.10);
+          })()
+        : (() => {
+            for (let i = 2; i < Math.floor(n * 0.3); i++) {
+              if ((xfDiff[i] || 0) > 0.5 && (whDiff[i] || 0) > 0.002) return i;
+            }
+            return Math.floor(n * 0.10);
+          })()
     );
 
     // ── 어드레스 평균 wrist height (임팩트 복귀 기준) ─
@@ -514,20 +522,24 @@ export class SwingAnalyzer {
       topIdx = Math.max(addrEnd + 1, impactIdx - Math.max(2, Math.floor(n * 0.05)));
     }
 
-    // ── 단계 할당 ─────────────────────────────────
+    // ── 단계 할당 (탑/임팩트 ±3프레임 윈도우) ────────
+    const topWin = 3;   // backswing_top 중심 ±3프레임
+    const impPre = 2;   // impact 전 2프레임
+    const impPost = Math.max(3, Math.floor(n * 0.03));  // impact 후 3+프레임
     const phases = [];
     for (let i = 0; i < n; i++) {
       if (i <= addrEnd) {
         phases.push('address');
-      } else if (i < topIdx * 0.4) {
-        phases.push('takeaway');
-      } else if (i < topIdx * 0.85) {
-        phases.push('backswing');
-      } else if (i <= topIdx + 1) {
+      } else if (i < topIdx - topWin) {
+        // takeaway + backswing (topIdx - topWin 전까지)
+        const mid = (addrEnd + topIdx - topWin) * 0.5;
+        if (i < mid) phases.push('takeaway');
+        else phases.push('backswing');
+      } else if (i <= topIdx + topWin) {
         phases.push('backswing_top');
-      } else if (i < impactIdx) {
+      } else if (i < impactIdx - impPre) {
         phases.push('downswing');
-      } else if (i <= impactIdx + Math.max(1, Math.floor(n * 0.03))) {
+      } else if (i <= impactIdx + impPost) {
         phases.push('impact');
       } else {
         phases.push('follow_through');
@@ -791,6 +803,8 @@ export class SwingAnalyzer {
     const allMetrics = frames.map(f => f.metrics);
     const detectedClub = frames[0]?.metrics
       ? this._detectClubFromMetrics(allMetrics, cameraView) : club;
+    // 디버그: 클럽 감지 신호 저장
+    this._lastClubSignals = this._clubDebug || {};
 
     // 단계 분류 (DTL 뷰에서는 wrist 기반 가중치 사용)
     const phases = this.classifyPhases(allMetrics, fps, cameraView);
@@ -842,6 +856,15 @@ export class SwingAnalyzer {
       };
     }
 
+    // 디버그 데이터
+    const phaseCounts = {};
+    for (const p of phases) phaseCounts[p] = (phaseCounts[p] || 0) + 1;
+    const validPhaseCounts = {};
+    for (let i = 0; i < frames.length; i++) {
+      const p = phases[i];
+      if (frames[i]?.landmarks) validPhaseCounts[p] = (validPhaseCounts[p] || 0) + 1;
+    }
+
     return {
       metadata: {
         club: detectedClub,
@@ -860,6 +883,15 @@ export class SwingAnalyzer {
       user_level: userLevel,
       overall_score: overallScore,
       key_frame_landmarks,
+      _debug: {
+        phaseIndices: phIdx,
+        clubSignals: this._lastClubSignals,
+        phaseCounts,
+        validPhaseCounts,
+        phaseAvgKeys: Object.fromEntries(
+          Object.entries(phaseAverages).map(([k, v]) => [k, Object.keys(v)])
+        ),
+      },
     };
   }
 
@@ -875,13 +907,12 @@ export class SwingAnalyzer {
     const avgLK = lk.length > 0 ? lk.reduce((a, b) => a + b, 0) / lk.length : 170;
 
     if (cameraView === 'down_the_line') {
-      // DTL: spine_angle 2D 신뢰도 낮음 → wrist 움직임 범위 + 무릎 각도 기반
-      // 드라이버: 큰 백스윙 (wrist 높이 범위 넓음) + 무릎 구부림 적음 (넓은 스탠스)
-      if (whRange > 0.35 && avgLK < 170) return 'driver';
-      // 아이언: 풀스윙 (wrist 움직임 범위 0.15 이상)
-      if (whRange > 0.12) return 'iron';
-      // 웨지: 하프스윙 이하 (wrist 움직임 범위 작음)
-      if (whRange > 0.06) return 'wedge';
+      const addrSlice = wh.slice(0, Math.max(3, Math.ceil(wh.length * 0.10)));
+      const addrWH = addrSlice.reduce((a, b) => a + b, 0) / addrSlice.length;
+      this._clubDebug = { maxWH: +maxWH.toFixed(3), minWH: +minWH.toFixed(3), whRange: +whRange.toFixed(3), addrWH: +addrWH.toFixed(3), avgLK: +avgLK.toFixed(1), avgSA: +avgSA.toFixed(1), view: 'dtl' };
+      if (whRange > 0.40 && maxWH > 0.70 && addrWH > 0.46) return 'driver';
+      if (whRange > 0.10) return 'iron';
+      if (whRange > 0.05) return 'wedge';
       return 'putter';
     }
 
