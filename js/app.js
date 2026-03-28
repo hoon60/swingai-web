@@ -6,6 +6,11 @@
 import { SwingPoseEngine } from './pose-engine.js';
 import { SwingAnalyzer, METRIC_NAMES_KR, CONCERN_KR } from './swing-analyzer.js';
 import { generateFeedback } from './feedback.js';
+import { GeminiVision } from './gemini-vision.js';
+import { SwingLearning } from './self-learning.js';
+
+// SwingLearning을 전역에 노출 (swing-analyzer.js에서 typeof 체크로 사용)
+window.SwingLearning = SwingLearning;
 
 // ─────────────────────────────────────────────
 // State
@@ -410,6 +415,19 @@ async function runAnalysis() {
 
     analysisResult = analyzer.analyze(frames, cameraView, { club, handedness, concern });
 
+    // 자가학습: 수학 모델 결과 저장
+    try {
+      const learning = new SwingLearning();
+      if (analysisResult._phaseDetection) {
+        const pd = analysisResult._phaseDetection;
+        learning.saveConfirmedPhases(
+          cameraView, pd.totalFrames, 0, pd.topIdx, pd.impactIdx, 'math'
+        );
+      }
+    } catch (e) {
+      console.warn('[자가학습] 저장 실패:', e);
+    }
+
     // Step 3: 결과 렌더링
     els.progressStep.textContent = '4/4: 결과 생성';
     els.progressBar.style.width = '100%';
@@ -420,7 +438,10 @@ async function runAnalysis() {
     // 히스토리 저장
     saveAnalysisHistory(analysisResult);
 
-    // Step 4: AI 피드백 (비동기)
+    // Step 4-a: Gemini Vision 비동기 검증 (백그라운드)
+    _runGeminiVerification(els.videoPreview, analysisResult, cameraView);
+
+    // Step 4-b: AI 피드백 (비동기)
     // API 키: 사용자 설정 우선, 없으면 기본 키
     const _k = [77,89,65,117,108,65,92,73,115,70,110,125,102,109,127,115,111,96,127,28,114,66,65,124,125,109,78,83,72,25,108,115,126,83,109,29,28,110,91,93,72,82,104,70,70,18,71,77,99,88,28,127,27,88,92,25];
     const apiKey = localStorage.getItem('groq_api_key') || _k.map(c => String.fromCharCode(c ^ 42)).join('');
@@ -451,6 +472,75 @@ async function runAnalysis() {
   }
 
   els.btnAnalyze.disabled = false;
+}
+
+// ─────────────────────────────────────────────
+// Gemini Vision 비동기 검증 (백그라운드)
+// ─────────────────────────────────────────────
+async function _runGeminiVerification(videoEl, result, cameraView) {
+  try {
+    const gemini = new GeminiVision();
+    const learning = new SwingLearning();
+    const pd = result._phaseDetection;
+    const usedFrames = result._usedFrames;
+
+    if (!pd || !usedFrames || usedFrames.length === 0) return;
+
+    // 1. 백스윙 탑 검증
+    const topResult = await gemini.verifyBackswingTop(videoEl, pd, usedFrames);
+    if (topResult && topResult.confidence >= 0.7 && topResult.frameIndex !== undefined) {
+      const geminiTopIdx = topResult.frameIndex;
+      if (Math.abs(geminiTopIdx - pd.topIdx) > 1) {
+        console.log(`[Gemini] 백스윙 탑 보정: ${pd.topIdx} → ${geminiTopIdx} (신뢰도: ${topResult.confidence})`);
+        // Gemini 확정 결과를 자가학습에 저장
+        learning.saveConfirmedPhases(
+          cameraView, pd.totalFrames, 0, geminiTopIdx, pd.impactIdx, 'gemini'
+        );
+        showToast('Gemini AI가 백스윙 탑을 보정했습니다', 3000);
+      } else {
+        // Gemini가 수학 모델과 일치 확인 → 역시 저장 (신뢰도 높음)
+        learning.saveConfirmedPhases(
+          cameraView, pd.totalFrames, 0, pd.topIdx, pd.impactIdx, 'gemini'
+        );
+      }
+    }
+
+    // 2. 클럽 종류 검증
+    const clubResult = await gemini.verifyClub(videoEl, usedFrames);
+    if (clubResult && clubResult.confidence >= 0.7) {
+      const geminiClub = clubResult.club;
+      const mathClub = result.metadata.club;
+
+      if (geminiClub !== mathClub) {
+        console.log(`[Gemini] 클럽 보정: ${mathClub} → ${geminiClub} (신뢰도: ${clubResult.confidence})`);
+        // Gemini 결과 우선 → UI 업데이트
+        result.metadata.club = geminiClub;
+        const clubEl = document.getElementById('detectedClub');
+        if (clubEl) {
+          const clubNames = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' };
+          clubEl.textContent = clubNames[geminiClub] || geminiClub;
+        }
+        showToast(`클럽 감지 보정: ${geminiClub}`, 3000);
+      }
+
+      // 학습 데이터 저장
+      const wh = usedFrames.filter(f => f.metrics?.wrist_height_rel != null)
+        .map(f => f.metrics.wrist_height_rel);
+      const sa = usedFrames.filter(f => f.metrics?.spine_angle_deg != null && f.metrics.spine_angle_deg > 0)
+        .map(f => f.metrics.spine_angle_deg);
+      const xf = usedFrames.filter(f => f.metrics?.x_factor_deg != null)
+        .map(f => Math.abs(f.metrics.x_factor_deg));
+
+      learning.saveClubDetection({
+        maxWristHeight: wh.length > 0 ? Math.max(...wh) : 0,
+        avgSpineAngle: sa.length > 0 ? sa.reduce((a, b) => a + b, 0) / sa.length : 0,
+        maxXFactor: xf.length > 0 ? Math.max(...xf) : 0,
+      }, geminiClub, 'gemini');
+    }
+  } catch (err) {
+    // Gemini 검증 실패는 무시 (수학 결과로 폴백)
+    console.warn('[Gemini 검증] 실패:', err.message);
+  }
 }
 
 // ─────────────────────────────────────────────

@@ -317,40 +317,131 @@ export const METRIC_NAMES_KR = {
 export class SwingAnalyzer {
 
   /**
-   * 스윙 6단계 자동 분류
+   * 스윙 6단계 자동 분류 — 다중 신호 하이브리드 감지 (v2.1)
+   *
+   * 백스윙 탑 감지 신호:
+   *   1) wrist_height_rel 최대점 (가중치 40%)
+   *   2) 왼손-오른엉덩이 2D 거리 최대점 (가중치 35%) — DTL 뷰에서 특히 유효
+   *   3) 어깨 라인 기울기(shoulder_line_tilt_deg) 변화 최대점 (가중치 25%)
+   *
+   * 임팩트 감지 신호:
+   *   1) wrist_height 차분 최대 (가중치 50%)
+   *   2) 왼손 속도(프레임간 이동거리) 최대점 (가중치 50%)
+   *
+   * 자가학습 보정은 analyze() 단계에서 적용
    */
-  classifyPhases(allMetrics, fps = 30) {
+  classifyPhases(allMetrics, fps = 30, rawLandmarks = null) {
     const n = allMetrics.length;
     if (n === 0) return [];
 
-    const xFactors = allMetrics.map(m => (m && m.x_factor_deg) || 0);
     const wristHeights = allMetrics.map(m => (m && m.wrist_height_rel) || 0);
 
-    // 임팩트 프레임: wrist_height 차분 최대 지점
-    let impactIdx = null;
-    const whDiff = [];
+    // ── 임팩트 감지: 다중 신호 ──
+
+    // 신호 1: wrist_height 차분 최대
+    const whDiff = [0];
     for (let i = 1; i < n; i++) {
       whDiff.push(Math.abs(wristHeights[i] - wristHeights[i - 1]));
     }
-    if (whDiff.length > 0 && Math.max(...whDiff) > 1e-6) {
-      impactIdx = whDiff.indexOf(Math.max(...whDiff)) + 1;
+    const whDiffSmoothed = this._gaussianSmooth(whDiff, 3);
+    let impactByWhDiff = Math.floor(n * 0.6);
+    let maxWhDiff = 0;
+    for (let i = Math.floor(n * 0.3); i < Math.floor(n * 0.85); i++) {
+      if (whDiffSmoothed[i] > maxWhDiff) {
+        maxWhDiff = whDiffSmoothed[i];
+        impactByWhDiff = i;
+      }
     }
-    if (impactIdx === null) {
-      impactIdx = Math.floor(n * 0.6);
+
+    // 신호 2: 왼손 속도 (프레임간 이동거리) 최대점
+    let impactByWristVel = impactByWhDiff;
+    if (rawLandmarks && rawLandmarks.length === n) {
+      const wristVelocities = this._computeWristVelocities(rawLandmarks);
+      if (wristVelocities) {
+        const smoothVel = this._gaussianSmooth(wristVelocities, 3);
+        let maxVel = 0;
+        for (let i = Math.floor(n * 0.3); i < Math.floor(n * 0.85); i++) {
+          if (smoothVel[i] > maxVel) {
+            maxVel = smoothVel[i];
+            impactByWristVel = i;
+          }
+        }
+      }
     }
+
+    // 가중 평균으로 임팩트 인덱스 결정 (whDiff 50%, wristVel 50%)
+    let impactIdx = Math.round(impactByWhDiff * 0.5 + impactByWristVel * 0.5);
     impactIdx = Math.max(Math.floor(n * 0.3), Math.min(impactIdx, Math.floor(n * 0.85)));
 
-    // backswing_top: 임팩트 전 wrist_height 최대 지점
-    let topIdx;
+    // ── 백스윙 탑 감지: 3중 신호 ──
+
+    // 신호 1: wrist_height 최대점 (임팩트 전 구간)
+    let topByWristHeight = Math.floor(n * 0.4);
     if (impactIdx > 2) {
       const preImpact = wristHeights.slice(0, impactIdx);
-      topIdx = preImpact.indexOf(Math.max(...preImpact));
-    } else {
-      topIdx = Math.floor(n * 0.4);
+      topByWristHeight = preImpact.indexOf(Math.max(...preImpact));
     }
+
+    // 신호 2: 왼손-오른엉덩이 2D 거리 최대점 (DTL 뷰에서 특히 유효)
+    let topByHandHipDist = topByWristHeight;
+    if (rawLandmarks && rawLandmarks.length === n) {
+      const handHipDists = this._computeHandHipDistances(rawLandmarks);
+      if (handHipDists) {
+        let maxDist = 0;
+        // 어드레스 구간(처음 10%) 이후 ~ 임팩트 전까지 탐색
+        const searchStart = Math.floor(n * 0.1);
+        for (let i = searchStart; i < impactIdx; i++) {
+          if (handHipDists[i] > maxDist) {
+            maxDist = handHipDists[i];
+            topByHandHipDist = i;
+          }
+        }
+      }
+    }
+
+    // 신호 3: 어깨 라인 기울기(shoulder_line_tilt_deg) 누적 변화 최대점
+    let topByShoulderTilt = topByWristHeight;
+    const shoulderTilts = allMetrics.map(m => (m && m.shoulder_line_tilt_deg) || 0);
+    if (shoulderTilts.some(v => v !== 0)) {
+      // 어드레스 대비 기울기 변화의 절대값 최대점
+      const baseTilt = shoulderTilts[0] || 0;
+      let maxTiltChange = 0;
+      const searchStart = Math.floor(n * 0.1);
+      for (let i = searchStart; i < impactIdx; i++) {
+        const change = Math.abs(shoulderTilts[i] - baseTilt);
+        if (change > maxTiltChange) {
+          maxTiltChange = change;
+          topByShoulderTilt = i;
+        }
+      }
+    }
+
+    // 가중 평균 (wrist_height 40%, 손-엉덩이 거리 35%, 어깨기울기 25%)
+    let topIdx = Math.round(
+      topByWristHeight * 0.40 +
+      topByHandHipDist * 0.35 +
+      topByShoulderTilt * 0.25
+    );
+
+    // 안전 범위 클램핑
     if (topIdx >= impactIdx) {
       topIdx = Math.max(1, impactIdx - Math.max(2, Math.floor(n * 0.05)));
     }
+    topIdx = Math.max(Math.floor(n * 0.15), Math.min(topIdx, Math.floor(n * 0.7)));
+
+    // 감지 신뢰도 메타 저장 (디버그 / Gemini 검증용)
+    this._lastPhaseDetection = {
+      topIdx,
+      impactIdx,
+      signals: {
+        topByWristHeight,
+        topByHandHipDist,
+        topByShoulderTilt,
+        impactByWhDiff,
+        impactByWristVel,
+      },
+      totalFrames: n,
+    };
 
     // 단계 할당
     const phases = [];
@@ -372,6 +463,58 @@ export class SwingAnalyzer {
       }
     }
     return phases;
+  }
+
+  /**
+   * 왼손 프레임간 2D 이동 속도 계산
+   * @param {Array} rawLandmarks - 각 프레임의 MediaPipe landmarks 배열
+   * @returns {Array|null} 각 프레임의 왼손 이동 속도 (첫 프레임은 0)
+   */
+  _computeWristVelocities(rawLandmarks) {
+    try {
+      const velocities = [0];
+      for (let i = 1; i < rawLandmarks.length; i++) {
+        const prev = rawLandmarks[i - 1];
+        const curr = rawLandmarks[i];
+        if (!prev || !curr || !prev[15] || !curr[15]) {
+          velocities.push(0);
+          continue;
+        }
+        // 왼손(15번) 좌표 간 유클리드 거리
+        const dx = curr[15].x - prev[15].x;
+        const dy = curr[15].y - prev[15].y;
+        velocities.push(Math.sqrt(dx * dx + dy * dy));
+      }
+      return velocities;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 왼손-오른엉덩이 2D 거리 계산 (DTL 뷰에서 백스윙 탑 감지용)
+   * 팔이 뒤로 갈수록 2D 투영 거리가 증가 → 최대점 ≈ 백스윙 탑
+   * @param {Array} rawLandmarks - 각 프레임의 MediaPipe landmarks 배열
+   * @returns {Array|null} 각 프레임의 왼손-오른엉덩이 거리
+   */
+  _computeHandHipDistances(rawLandmarks) {
+    try {
+      const distances = [];
+      for (let i = 0; i < rawLandmarks.length; i++) {
+        const lm = rawLandmarks[i];
+        if (!lm || !lm[15] || !lm[24]) {
+          distances.push(0);
+          continue;
+        }
+        // 왼손(15) - 오른엉덩이(24) 2D 거리
+        const dx = lm[15].x - lm[24].x;
+        const dy = lm[15].y - lm[24].y;
+        distances.push(Math.sqrt(dx * dx + dy * dy));
+      }
+      return distances;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -618,6 +761,7 @@ export class SwingAnalyzer {
 
   /**
    * 전체 분석 파이프라인 실행
+   * v2.1: 다중 신호 페이즈 감지 + 자가학습 보정 + Gemini Vision 비동기 검증
    */
   analyze(frames, cameraView, options = {}) {
     const { club = 'driver', handedness = 'right', concern = 'distance' } = options;
@@ -641,8 +785,43 @@ export class SwingAnalyzer {
     const detectedClub = usedFrames[0]?.metrics ?
       this._detectClubFromMetrics(allMetrics) : club;
 
-    // 단계 분류
-    const phases = this.classifyPhases(allMetrics, fps);
+    // rawLandmarks 추출 (다중 신호 감지용)
+    const rawLandmarks = usedFrames.map(f => f.landmarks || null);
+
+    // 단계 분류 (다중 신호 하이브리드)
+    let phases = this.classifyPhases(allMetrics, fps, rawLandmarks);
+
+    // ── 자가학습 보정 ──
+    try {
+      if (typeof SwingLearning !== 'undefined') {
+        const learning = new SwingLearning();
+        const predicted = learning.getPredictedPhases(cameraView);
+        if (predicted && predicted.sampleSize >= 5 && this._lastPhaseDetection) {
+          const totalFrames = allMetrics.length;
+          const mathTopIdx = this._lastPhaseDetection.topIdx;
+          const mathImpactIdx = this._lastPhaseDetection.impactIdx;
+
+          // 학습된 패턴과 수학 결과를 50:50 블렌딩
+          const blendedTopIdx = Math.round(
+            mathTopIdx * 0.5 + predicted.topRatio * totalFrames * 0.5
+          );
+          const blendedImpactIdx = Math.round(
+            mathImpactIdx * 0.5 + predicted.impactRatio * totalFrames * 0.5
+          );
+
+          // 블렌딩 결과가 의미있게 다르면 재분류
+          if (Math.abs(blendedTopIdx - mathTopIdx) > 1 ||
+              Math.abs(blendedImpactIdx - mathImpactIdx) > 1) {
+            console.log(`[자가학습] 탑 보정: ${mathTopIdx}→${blendedTopIdx}, 임팩트 보정: ${mathImpactIdx}→${blendedImpactIdx}`);
+            this._lastPhaseDetection.topIdx = blendedTopIdx;
+            this._lastPhaseDetection.impactIdx = blendedImpactIdx;
+            phases = this._assignPhasesFromIndices(totalFrames, blendedTopIdx, blendedImpactIdx);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[자가학습 보정 실패]', e);
+    }
 
     // 템포 분석
     const tempo = this.computeTempo(phases, fps);
@@ -704,6 +883,9 @@ export class SwingAnalyzer {
       }
     }
 
+    // Gemini 비동기 검증에 필요한 프레임 데이터 저장
+    const _phaseDetection = this._lastPhaseDetection || {};
+
     return {
       metadata: {
         club: detectedClub,
@@ -723,7 +905,36 @@ export class SwingAnalyzer {
       user_level: userLevel,
       overall_score: overallScore,
       key_frame_landmarks: keyFrameLandmarks,
+      // v2.1: Gemini 검증용 메타데이터
+      _phaseDetection,
+      _usedFrames: usedFrames,
     };
+  }
+
+  /**
+   * topIdx, impactIdx로부터 페이즈 배열을 재생성하는 헬퍼
+   * 자가학습 보정이나 Gemini 검증 후 재분류에 사용
+   */
+  _assignPhasesFromIndices(n, topIdx, impactIdx) {
+    const phases = [];
+    for (let i = 0; i < n; i++) {
+      if (i <= Math.max(1, Math.floor(n * 0.08))) {
+        phases.push('address');
+      } else if (i < topIdx * 0.4) {
+        phases.push('takeaway');
+      } else if (i < topIdx * 0.85) {
+        phases.push('backswing');
+      } else if (i <= topIdx + 1) {
+        phases.push('backswing_top');
+      } else if (i < impactIdx) {
+        phases.push('downswing');
+      } else if (i <= impactIdx + Math.max(1, Math.floor(n * 0.03))) {
+        phases.push('impact');
+      } else {
+        phases.push('follow_through');
+      }
+    }
+    return phases;
   }
 
   /**
@@ -731,6 +942,7 @@ export class SwingAnalyzer {
    * localStorage에 저장된 이전 분석들의 지표 평균과 현재 결과를 비교
    * @returns {Object} phase -> metric -> { prevAvg, direction, diffPct }
    */
+
   /**
    * 스윙 구간 자동 감지 (손목 속도 기반)
    * 임팩트 = 손목 이동 속도 최대 지점
@@ -872,13 +1084,54 @@ export class SwingAnalyzer {
     return comparison;
   }
 
+  /**
+   * 클럽 종류 자동 감지 (개선된 다중 신호)
+   * - 최대 손목 높이, 평균 척추 각도, X-Factor, 스윙 크기 종합 판단
+   * - 드라이버/아이언/웨지 구분 정확도 향상
+   * - Gemini Vision 검증 후 결과 교체 가능
+   */
   _detectClubFromMetrics(allMetrics) {
     const wh = allMetrics.filter(m => m && m.wrist_height_rel != null).map(m => m.wrist_height_rel);
     const sa = allMetrics.filter(m => m && m.spine_angle_deg != null && m.spine_angle_deg > 0).map(m => m.spine_angle_deg);
+    const xf = allMetrics.filter(m => m && m.x_factor_deg != null).map(m => Math.abs(m.x_factor_deg));
+
     const maxWH = wh.length > 0 ? Math.max(...wh) : 0;
     const avgSA = sa.length > 0 ? sa.reduce((a, b) => a + b, 0) / sa.length : 0;
-    if (maxWH > 0.85 && avgSA < 38) return 'driver';
-    if (maxWH > 0.55 || avgSA < 40) return 'iron';
+    const maxXF = xf.length > 0 ? Math.max(...xf) : 0;
+
+    // 스윙 크기 (손목 높이 범위)
+    const minWH = wh.length > 0 ? Math.min(...wh) : 0;
+    const swingRange = maxWH - minWH;
+
+    // 점수 기반 판별 (각 클럽별 유사도)
+    let driverScore = 0;
+    let ironScore = 0;
+    let wedgeScore = 0;
+
+    // 손목 높이 기반
+    if (maxWH > 0.80) driverScore += 3;
+    else if (maxWH > 0.60) { driverScore += 1; ironScore += 2; }
+    else if (maxWH > 0.45) ironScore += 2;
+    else { ironScore += 1; wedgeScore += 2; }
+
+    // 척추 각도 기반 (드라이버는 작고, 웨지는 큼)
+    if (avgSA < 22) driverScore += 2;
+    else if (avgSA < 30) ironScore += 2;
+    else wedgeScore += 2;
+
+    // X-Factor 기반 (드라이버 > 아이언 > 웨지)
+    if (maxXF > 40) driverScore += 2;
+    else if (maxXF > 25) ironScore += 2;
+    else wedgeScore += 1;
+
+    // 스윙 크기 기반
+    if (swingRange > 0.35) driverScore += 1;
+    else if (swingRange > 0.20) ironScore += 1;
+    else wedgeScore += 1;
+
+    // 최고 점수 클럽 선택
+    if (driverScore >= ironScore && driverScore >= wedgeScore) return 'driver';
+    if (ironScore >= wedgeScore) return 'iron';
     return 'wedge';
   }
 }
