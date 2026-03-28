@@ -789,10 +789,8 @@ export class SwingAnalyzer {
     const fps = 30;
 
     const allMetrics = frames.map(f => f.metrics);
-    // 유저가 직접 선택한 클럽을 우선 사용, 'auto'이거나 미지정 시 자동 감지
-    const detectedClub = (club && club !== 'auto')
-      ? club
-      : (frames[0]?.metrics ? this._detectClubFromMetrics(allMetrics) : 'driver');
+    const detectedClub = frames[0]?.metrics
+      ? this._detectClubFromMetrics(allMetrics, cameraView) : club;
 
     // 단계 분류 (DTL 뷰에서는 wrist 기반 가중치 사용)
     const phases = this.classifyPhases(allMetrics, fps, cameraView);
@@ -865,13 +863,32 @@ export class SwingAnalyzer {
     };
   }
 
-  _detectClubFromMetrics(allMetrics) {
+  _detectClubFromMetrics(allMetrics, cameraView = 'face_on') {
     const wh = allMetrics.filter(m => m && m.wrist_height_rel != null).map(m => m.wrist_height_rel);
     const sa = allMetrics.filter(m => m && m.spine_angle_deg != null && m.spine_angle_deg > 0).map(m => m.spine_angle_deg);
+    const lk = allMetrics.filter(m => m && m.left_knee_flex_deg != null).map(m => m.left_knee_flex_deg);
     const maxWH = wh.length > 0 ? Math.max(...wh) : 0;
     const avgSA = sa.length > 0 ? sa.reduce((a, b) => a + b, 0) / sa.length : 0;
+    const minWH = wh.length > 0 ? Math.min(...wh) : 0;
+    // 스윙 범위 = 최고-최저 (풀스윙 판별 핵심)
+    const whRange = maxWH - minWH;
+    const avgLK = lk.length > 0 ? lk.reduce((a, b) => a + b, 0) / lk.length : 170;
+
+    if (cameraView === 'down_the_line') {
+      // DTL: spine_angle 2D 신뢰도 낮음 → wrist 움직임 범위 + 무릎 각도 기반
+      // 드라이버: 큰 백스윙 (wrist 높이 범위 넓음) + 무릎 구부림 적음 (넓은 스탠스)
+      if (whRange > 0.35 && avgLK < 170) return 'driver';
+      // 아이언: 풀스윙 (wrist 움직임 범위 0.15 이상)
+      if (whRange > 0.12) return 'iron';
+      // 웨지: 하프스윙 이하 (wrist 움직임 범위 작음)
+      if (whRange > 0.06) return 'wedge';
+      return 'putter';
+    }
+
+    // Face-on: 기존 로직 (spine_angle 신뢰 가능)
     if (maxWH > 0.85 && avgSA < 38) return 'driver';
     if (maxWH > 0.55 || avgSA < 40) return 'iron';
-    return 'wedge';
+    if (maxWH > 0.35) return 'wedge';
+    return 'putter';
   }
 }
