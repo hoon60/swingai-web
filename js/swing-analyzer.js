@@ -317,136 +317,191 @@ export const METRIC_NAMES_KR = {
 export class SwingAnalyzer {
 
   /**
-   * 스윙 6단계 자동 분류 — 다중 신호 하이브리드 감지 (v2.1)
-   *
-   * 백스윙 탑 감지 신호:
-   *   1) wrist_height_rel 최대점 (가중치 40%)
-   *   2) 왼손-오른엉덩이 2D 거리 최대점 (가중치 35%) — DTL 뷰에서 특히 유효
-   *   3) 어깨 라인 기울기(shoulder_line_tilt_deg) 변화 최대점 (가중치 25%)
-   *
-   * 임팩트 감지 신호:
-   *   1) wrist_height 차분 최대 (가중치 50%)
-   *   2) 왼손 속도(프레임간 이동거리) 최대점 (가중치 50%)
-   *
-   * 자가학습 보정은 analyze() 단계에서 적용
+   * 스윙 6단계 자동 분류
    */
-  classifyPhases(allMetrics, fps = 30, rawLandmarks = null) {
+  /**
+   * 스윙 6단계 자동 분류 v3.0 — 5-signal 가중 스코어 방식
+   *
+   * 핵심 원리:
+   *   백스윙 탑 = 모든 움직임이 순간적으로 '멈추는' 지점 (변화율 → 0)
+   *   임팩트    = 손목이 어드레스 높이로 복귀 + X-factor 소진 + 하강 속도 최대
+   *   어드레스  = 스윙 시작 전 정지 구간 (움직임 최소)
+   *
+   * Signal weights:
+   *   top:    wristHeight(0.20) + wristVelocity(0.30) + xFactorRate(0.25)
+   *           + shoulderRate(0.15) + framePrior(0.10)
+   *   impact: wristReturn(0.35) + xFactorDrop(0.35) + wristDropSpeed(0.30)
+   */
+  classifyPhases(allMetrics, fps = 30) {
     const n = allMetrics.length;
     if (n === 0) return [];
 
-    const wristHeights = allMetrics.map(m => (m && m.wrist_height_rel) || 0);
+    // ── 시그널 추출 ──────────────────────────────
+    const wh  = allMetrics.map(m => (m && m.wrist_height_rel  != null) ? m.wrist_height_rel  : null);
+    const xf  = allMetrics.map(m => (m && m.x_factor_deg      != null) ? m.x_factor_deg      : null);
+    const sht = allMetrics.map(m => (m && m.shoulder_turn_deg  != null) ? m.shoulder_turn_deg  : null);
 
-    // ── 임팩트 감지: 다중 신호 ──
+    // ── 스무딩 유틸 (rolling mean, window=3) ─────
+    const smooth = (arr, w = 3) => arr.map((v, i) => {
+      const start = Math.max(0, i - Math.floor(w / 2));
+      const end   = Math.min(arr.length, start + w);
+      const vals  = arr.slice(start, end).filter(x => x !== null);
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    });
 
-    // 신호 1: wrist_height 차분 최대
-    const whDiff = [0];
-    for (let i = 1; i < n; i++) {
-      whDiff.push(Math.abs(wristHeights[i] - wristHeights[i - 1]));
-    }
-    const whDiffSmoothed = this._gaussianSmooth(whDiff, 3);
-    let impactByWhDiff = Math.floor(n * 0.6);
-    let maxWhDiff = 0;
-    for (let i = Math.floor(n * 0.3); i < Math.floor(n * 0.85); i++) {
-      if (whDiffSmoothed[i] > maxWhDiff) {
-        maxWhDiff = whDiffSmoothed[i];
-        impactByWhDiff = i;
-      }
-    }
-
-    // 신호 2: 왼손 속도 (프레임간 이동거리) 최대점
-    let impactByWristVel = impactByWhDiff;
-    if (rawLandmarks && rawLandmarks.length === n) {
-      const wristVelocities = this._computeWristVelocities(rawLandmarks);
-      if (wristVelocities) {
-        const smoothVel = this._gaussianSmooth(wristVelocities, 3);
-        let maxVel = 0;
-        for (let i = Math.floor(n * 0.3); i < Math.floor(n * 0.85); i++) {
-          if (smoothVel[i] > maxVel) {
-            maxVel = smoothVel[i];
-            impactByWristVel = i;
+    // 결측값 선형 보간
+    const interpolate = (arr) => {
+      const out = [...arr];
+      for (let i = 0; i < out.length; i++) {
+        if (out[i] === null) {
+          let left = i - 1;
+          let right = i + 1;
+          while (left >= 0 && out[left] === null) left--;
+          while (right < out.length && out[right] === null) right++;
+          if (left >= 0 && right < out.length) {
+            out[i] = out[left] + (out[right] - out[left]) * ((i - left) / (right - left));
+          } else if (left >= 0) {
+            out[i] = out[left];
+          } else if (right < out.length) {
+            out[i] = out[right];
+          } else {
+            out[i] = 0;
           }
         }
       }
-    }
-
-    // 가중 평균으로 임팩트 인덱스 결정 (whDiff 50%, wristVel 50%)
-    let impactIdx = Math.round(impactByWhDiff * 0.5 + impactByWristVel * 0.5);
-    impactIdx = Math.max(Math.floor(n * 0.3), Math.min(impactIdx, Math.floor(n * 0.85)));
-
-    // ── 백스윙 탑 감지: 3중 신호 ──
-
-    // 신호 1: wrist_height 최대점 (임팩트 전 구간)
-    let topByWristHeight = Math.floor(n * 0.4);
-    if (impactIdx > 2) {
-      const preImpact = wristHeights.slice(0, impactIdx);
-      topByWristHeight = preImpact.indexOf(Math.max(...preImpact));
-    }
-
-    // 신호 2: 왼손-오른엉덩이 2D 거리 최대점 (DTL 뷰에서 특히 유효)
-    let topByHandHipDist = topByWristHeight;
-    if (rawLandmarks && rawLandmarks.length === n) {
-      const handHipDists = this._computeHandHipDistances(rawLandmarks);
-      if (handHipDists) {
-        let maxDist = 0;
-        // 어드레스 구간(처음 10%) 이후 ~ 임팩트 전까지 탐색
-        const searchStart = Math.floor(n * 0.1);
-        for (let i = searchStart; i < impactIdx; i++) {
-          if (handHipDists[i] > maxDist) {
-            maxDist = handHipDists[i];
-            topByHandHipDist = i;
-          }
-        }
-      }
-    }
-
-    // 신호 3: 어깨 라인 기울기(shoulder_line_tilt_deg) 누적 변화 최대점
-    let topByShoulderTilt = topByWristHeight;
-    const shoulderTilts = allMetrics.map(m => (m && m.shoulder_line_tilt_deg) || 0);
-    if (shoulderTilts.some(v => v !== 0)) {
-      // 어드레스 대비 기울기 변화의 절대값 최대점
-      const baseTilt = shoulderTilts[0] || 0;
-      let maxTiltChange = 0;
-      const searchStart = Math.floor(n * 0.1);
-      for (let i = searchStart; i < impactIdx; i++) {
-        const change = Math.abs(shoulderTilts[i] - baseTilt);
-        if (change > maxTiltChange) {
-          maxTiltChange = change;
-          topByShoulderTilt = i;
-        }
-      }
-    }
-
-    // 가중 평균 (wrist_height 40%, 손-엉덩이 거리 35%, 어깨기울기 25%)
-    let topIdx = Math.round(
-      topByWristHeight * 0.40 +
-      topByHandHipDist * 0.35 +
-      topByShoulderTilt * 0.25
-    );
-
-    // 안전 범위 클램핑
-    if (topIdx >= impactIdx) {
-      topIdx = Math.max(1, impactIdx - Math.max(2, Math.floor(n * 0.05)));
-    }
-    topIdx = Math.max(Math.floor(n * 0.15), Math.min(topIdx, Math.floor(n * 0.7)));
-
-    // 감지 신뢰도 메타 저장 (디버그 / Gemini 검증용)
-    this._lastPhaseDetection = {
-      topIdx,
-      impactIdx,
-      signals: {
-        topByWristHeight,
-        topByHandHipDist,
-        topByShoulderTilt,
-        impactByWhDiff,
-        impactByWristVel,
-      },
-      totalFrames: n,
+      return out;
     };
 
-    // 단계 할당
+    const whS  = smooth(interpolate(wh),  3);
+    const xfS  = smooth(interpolate(xf),  3);
+    const shtS = smooth(interpolate(sht), 3);
+
+    // ── 프레임별 변화율 계산 ──────────────────────
+    const diff = (arr) => arr.map((v, i) => i === 0 ? 0 : Math.abs((v ?? 0) - (arr[i - 1] ?? 0)));
+    const whDiff  = diff(whS);
+    const xfDiff  = diff(xfS);
+    const shtDiff = diff(shtS);
+
+    // ── 어드레스 감지: 초반 정지 구간 ────────────
+    // 처음 5%~15% 구간에서 움직임이 최소인 연속 프레임을 찾음
+    const addrEnd = Math.min(
+      Math.floor(n * 0.15),
+      (() => {
+        // X-factor가 처음으로 0.5deg/frame 이상 증가하는 시점
+        for (let i = 2; i < Math.floor(n * 0.3); i++) {
+          if ((xfDiff[i] || 0) > 0.5 && (whDiff[i] || 0) > 0.002) return i;
+        }
+        return Math.floor(n * 0.10);
+      })()
+    );
+
+    // ── 어드레스 평균 wrist height (임팩트 복귀 기준) ─
+    const addrWH = whS.slice(0, Math.max(1, addrEnd))
+      .reduce((a, b) => a + (b || 0), 0) / Math.max(1, addrEnd);
+
+    // ── 임팩트 탐색 범위: 전체의 40%~88% ─────────
+    const impSearchStart = Math.floor(n * 0.40);
+    const impSearchEnd   = Math.floor(n * 0.88);
+
+    // 임팩트 스코어 계산
+    const impactScores = new Array(n).fill(0);
+    const normalize = (arr, searchS, searchE) => {
+      const sub = arr.slice(searchS, searchE);
+      const min = Math.min(...sub);
+      const max = Math.max(...sub);
+      const range = max - min || 1;
+      return arr.map(v => (v - min) / range);
+    };
+
+    // Signal 1: wrist height가 address 높이와 가장 비슷한 지점 (높을수록 좋음)
+    const whReturnRaw = whS.map(v => -Math.abs((v || 0) - addrWH));
+    const whReturn = normalize(whReturnRaw, impSearchStart, impSearchEnd);
+
+    // Signal 2: X-factor 변화율 최대 (downswing에서 급감) → 소진 직후
+    const xfDropNorm = normalize(xfDiff, impSearchStart, impSearchEnd);
+
+    // Signal 3: 손목 하강 속도 (wrist가 내려오는 속도가 클수록 임팩트 근처)
+    const whDownRaw = whS.map((v, i) =>
+      i === 0 ? 0 : Math.max(0, (whS[i - 1] || 0) - (v || 0))
+    );
+    const whDown = normalize(whDownRaw, impSearchStart, impSearchEnd);
+
+    for (let i = impSearchStart; i < impSearchEnd; i++) {
+      impactScores[i] =
+        whReturn[i] * 0.35 +
+        xfDropNorm[i] * 0.35 +
+        whDown[i] * 0.30;
+    }
+
+    // 임팩트 = 스코어 최대 지점
+    let impactIdx = impSearchStart;
+    let bestImpact = -Infinity;
+    for (let i = impSearchStart; i < impSearchEnd; i++) {
+      if (impactScores[i] > bestImpact) {
+        bestImpact = impactScores[i];
+        impactIdx = i;
+      }
+    }
+
+    // ── 백스윙 탑 탐색 범위: addrEnd ~ impactIdx * 0.85 ──
+    const topSearchStart = addrEnd + 1;
+    const topSearchEnd   = Math.max(topSearchStart + 2, Math.floor(impactIdx * 0.85));
+
+    // 백스윙 탑 스코어 계산
+    const topScores = new Array(n).fill(0);
+
+    // Signal 1: smoothed wrist height 높을수록 (백스윙 탑에서 손목 올라감)
+    const whTopNorm = normalize(whS, topSearchStart, topSearchEnd);
+
+    // Signal 2: 손목 속도 최소 (방향 전환 직전, 0에 가까울수록)
+    const whVelInv = whDiff.map(v => -v);
+    const whVelNorm = normalize(whVelInv, topSearchStart, topSearchEnd);
+
+    // Signal 3: X-factor 변화율 최소 (어깨-힙 분리가 최대가 되는 순간 정지)
+    const xfRateInv = xfDiff.map(v => -v);
+    const xfRateNorm = normalize(xfRateInv, topSearchStart, topSearchEnd);
+
+    // Signal 4: 어깨 회전 변화율 최소 (어깨도 잠깐 멈춤)
+    const shtRateInv = shtDiff.map(v => -v);
+    const shtRateNorm = normalize(shtRateInv, topSearchStart, topSearchEnd);
+
+    // Signal 5: 프레임 위치 prior (전체의 30~55% 구간 선호, 가우시안)
+    const priorMean = 0.42;
+    const priorSigma = 0.10;
+    const framePrior = Array.from({ length: n }, (_, i) => {
+      const ratio = i / n;
+      return Math.exp(-0.5 * ((ratio - priorMean) / priorSigma) ** 2);
+    });
+    const framePriorNorm = normalize(framePrior, topSearchStart, topSearchEnd);
+
+    for (let i = topSearchStart; i < topSearchEnd; i++) {
+      topScores[i] =
+        whTopNorm[i]    * 0.20 +
+        whVelNorm[i]    * 0.30 +
+        xfRateNorm[i]   * 0.25 +
+        shtRateNorm[i]  * 0.15 +
+        framePriorNorm[i] * 0.10;
+    }
+
+    // 백스윙 탑 = 스코어 최대 지점
+    let topIdx = topSearchStart;
+    let bestTop = -Infinity;
+    for (let i = topSearchStart; i < topSearchEnd; i++) {
+      if (topScores[i] > bestTop) {
+        bestTop = topScores[i];
+        topIdx = i;
+      }
+    }
+
+    // 보정: topIdx < impactIdx 보장
+    if (topIdx >= impactIdx) {
+      topIdx = Math.max(addrEnd + 1, impactIdx - Math.max(2, Math.floor(n * 0.05)));
+    }
+
+    // ── 단계 할당 ─────────────────────────────────
     const phases = [];
     for (let i = 0; i < n; i++) {
-      if (i <= Math.max(1, Math.floor(n * 0.08))) {
+      if (i <= addrEnd) {
         phases.push('address');
       } else if (i < topIdx * 0.4) {
         phases.push('takeaway');
@@ -462,64 +517,15 @@ export class SwingAnalyzer {
         phases.push('follow_through');
       }
     }
+
+    // 디버그 정보 저장 (학습 시스템에서 활용)
+    this._lastPhaseIndices = { addrEnd, topIdx, impactIdx, n };
+    this._lastTopScores   = topScores;
+    this._lastImpactScores = impactScores;
+
     return phases;
   }
 
-  /**
-   * 왼손 프레임간 2D 이동 속도 계산
-   * @param {Array} rawLandmarks - 각 프레임의 MediaPipe landmarks 배열
-   * @returns {Array|null} 각 프레임의 왼손 이동 속도 (첫 프레임은 0)
-   */
-  _computeWristVelocities(rawLandmarks) {
-    try {
-      const velocities = [0];
-      for (let i = 1; i < rawLandmarks.length; i++) {
-        const prev = rawLandmarks[i - 1];
-        const curr = rawLandmarks[i];
-        if (!prev || !curr || !prev[15] || !curr[15]) {
-          velocities.push(0);
-          continue;
-        }
-        // 왼손(15번) 좌표 간 유클리드 거리
-        const dx = curr[15].x - prev[15].x;
-        const dy = curr[15].y - prev[15].y;
-        velocities.push(Math.sqrt(dx * dx + dy * dy));
-      }
-      return velocities;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 왼손-오른엉덩이 2D 거리 계산 (DTL 뷰에서 백스윙 탑 감지용)
-   * 팔이 뒤로 갈수록 2D 투영 거리가 증가 → 최대점 ≈ 백스윙 탑
-   * @param {Array} rawLandmarks - 각 프레임의 MediaPipe landmarks 배열
-   * @returns {Array|null} 각 프레임의 왼손-오른엉덩이 거리
-   */
-  _computeHandHipDistances(rawLandmarks) {
-    try {
-      const distances = [];
-      for (let i = 0; i < rawLandmarks.length; i++) {
-        const lm = rawLandmarks[i];
-        if (!lm || !lm[15] || !lm[24]) {
-          distances.push(0);
-          continue;
-        }
-        // 왼손(15) - 오른엉덩이(24) 2D 거리
-        const dx = lm[15].x - lm[24].x;
-        const dy = lm[15].y - lm[24].y;
-        distances.push(Math.sqrt(dx * dx + dy * dy));
-      }
-      return distances;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 템포/리듬 분석
-   */
   computeTempo(phases, fps = 30) {
     if (!phases || phases.length === 0) {
       return { backswing_sec: null, downswing_sec: null, tempo_ratio: null, tempo_rating: null };
@@ -761,67 +767,17 @@ export class SwingAnalyzer {
 
   /**
    * 전체 분석 파이프라인 실행
-   * v2.1: 다중 신호 페이즈 감지 + 자가학습 보정 + Gemini Vision 비동기 검증
    */
   analyze(frames, cameraView, options = {}) {
     const { club = 'driver', handedness = 'right', concern = 'distance' } = options;
     const fps = 30;
 
-    let allMetrics = frames.map(f => f.metrics);
-    let usedFrames = frames;
-
-    // 스윙 구간 자동 감지 (손목 속도 기반)
-    const swingBounds = this.detectSwingBounds(allMetrics, fps);
-    if (swingBounds) {
-      const [start, end] = swingBounds;
-      const trimLen = end - start + 1;
-      if (trimLen >= 15) {
-        console.log(`[스윙 감지] ${start}~${end} (${trimLen} frames)`);
-        usedFrames = frames.slice(start, end + 1);
-        allMetrics = allMetrics.slice(start, end + 1);
-      }
-    }
-
-    const detectedClub = usedFrames[0]?.metrics ?
+    const allMetrics = frames.map(f => f.metrics);
+    const detectedClub = frames[0]?.metrics ?
       this._detectClubFromMetrics(allMetrics) : club;
 
-    // rawLandmarks 추출 (다중 신호 감지용)
-    const rawLandmarks = usedFrames.map(f => f.landmarks || null);
-
-    // 단계 분류 (다중 신호 하이브리드)
-    let phases = this.classifyPhases(allMetrics, fps, rawLandmarks);
-
-    // ── 자가학습 보정 ──
-    try {
-      if (typeof SwingLearning !== 'undefined') {
-        const learning = new SwingLearning();
-        const predicted = learning.getPredictedPhases(cameraView);
-        if (predicted && predicted.sampleSize >= 5 && this._lastPhaseDetection) {
-          const totalFrames = allMetrics.length;
-          const mathTopIdx = this._lastPhaseDetection.topIdx;
-          const mathImpactIdx = this._lastPhaseDetection.impactIdx;
-
-          // 학습된 패턴과 수학 결과를 50:50 블렌딩
-          const blendedTopIdx = Math.round(
-            mathTopIdx * 0.5 + predicted.topRatio * totalFrames * 0.5
-          );
-          const blendedImpactIdx = Math.round(
-            mathImpactIdx * 0.5 + predicted.impactRatio * totalFrames * 0.5
-          );
-
-          // 블렌딩 결과가 의미있게 다르면 재분류
-          if (Math.abs(blendedTopIdx - mathTopIdx) > 1 ||
-              Math.abs(blendedImpactIdx - mathImpactIdx) > 1) {
-            console.log(`[자가학습] 탑 보정: ${mathTopIdx}→${blendedTopIdx}, 임팩트 보정: ${mathImpactIdx}→${blendedImpactIdx}`);
-            this._lastPhaseDetection.topIdx = blendedTopIdx;
-            this._lastPhaseDetection.impactIdx = blendedImpactIdx;
-            phases = this._assignPhasesFromIndices(totalFrames, blendedTopIdx, blendedImpactIdx);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[자가학습 보정 실패]', e);
-    }
+    // 단계 분류
+    const phases = this.classifyPhases(allMetrics, fps);
 
     // 템포 분석
     const tempo = this.computeTempo(phases, fps);
@@ -848,43 +804,9 @@ export class SwingAnalyzer {
     // 종합 점수
     const overallScore = this.computeOverallScore(relativeMetrics);
 
-    // 개인 베이스라인 비교
-    const personalBaseline = this.computePersonalBaseline(relativeMetrics);
-
-    // usedFrames 참조 업데이트 (스윙 구간 트림 반영)
-    frames = usedFrames;
-
     // 감지율
     const detectedCount = frames.filter(f => f.landmarks !== null).length;
     const detectionRate = +((detectedCount / frames.length) * 100).toFixed(1);
-
-    // 핵심 프레임의 landmarks 저장 (스켈레톤 오버레이용)
-    // 각 페이즈의 중간 프레임을 선택 (가장 대표적)
-    const keyFrameLandmarks = {};
-    const phaseIndices = {};
-    for (let i = 0; i < phases.length; i++) {
-      const p = phases[i];
-      if (['address', 'backswing_top', 'impact'].includes(p)) {
-        if (!phaseIndices[p]) phaseIndices[p] = [];
-        if (frames[i] && frames[i].landmarks) {
-          phaseIndices[p].push(i);
-        }
-      }
-    }
-    for (const [p, indices] of Object.entries(phaseIndices)) {
-      // 중간 프레임 선택
-      const midIdx = indices[Math.floor(indices.length / 2)];
-      if (frames[midIdx]) {
-        keyFrameLandmarks[p] = {
-          landmarks: frames[midIdx].landmarks,
-          frameIndex: frames[midIdx].frameIndex,
-          time: frames[midIdx].time,
-        };
-      }
-    }
-
-    // Gemini 비동기 검증에 필요한 프레임 데이터 저장
-    const _phaseDetection = this._lastPhaseDetection || {};
 
     return {
       metadata: {
@@ -900,238 +822,19 @@ export class SwingAnalyzer {
       tempo,
       phase_averages: phaseAverages,
       relative_metrics: relativeMetrics,
-      personal_baseline: personalBaseline,
       injuries,
       user_level: userLevel,
       overall_score: overallScore,
-      key_frame_landmarks: keyFrameLandmarks,
-      // v2.1: Gemini 검증용 메타데이터
-      _phaseDetection,
-      _usedFrames: usedFrames,
     };
   }
 
-  /**
-   * topIdx, impactIdx로부터 페이즈 배열을 재생성하는 헬퍼
-   * 자가학습 보정이나 Gemini 검증 후 재분류에 사용
-   */
-  _assignPhasesFromIndices(n, topIdx, impactIdx) {
-    const phases = [];
-    for (let i = 0; i < n; i++) {
-      if (i <= Math.max(1, Math.floor(n * 0.08))) {
-        phases.push('address');
-      } else if (i < topIdx * 0.4) {
-        phases.push('takeaway');
-      } else if (i < topIdx * 0.85) {
-        phases.push('backswing');
-      } else if (i <= topIdx + 1) {
-        phases.push('backswing_top');
-      } else if (i < impactIdx) {
-        phases.push('downswing');
-      } else if (i <= impactIdx + Math.max(1, Math.floor(n * 0.03))) {
-        phases.push('impact');
-      } else {
-        phases.push('follow_through');
-      }
-    }
-    return phases;
-  }
-
-  /**
-   * 개인 베이스라인 대비 비교 계산
-   * localStorage에 저장된 이전 분석들의 지표 평균과 현재 결과를 비교
-   * @returns {Object} phase -> metric -> { prevAvg, direction, diffPct }
-   */
-
-  /**
-   * 스윙 구간 자동 감지 (손목 속도 기반)
-   * 임팩트 = 손목 이동 속도 최대 지점
-   * 스윙 시작 = 임팩트 전 정지 구간
-   * 스윙 끝 = 임팩트 후 정지 구간
-   */
-  detectSwingBounds(allMetrics, fps) {
-    if (allMetrics.length < 20) return null;
-
-    // 손목 높이 변화(속도) 계산
-    const wristHeights = allMetrics.map(m => (m && m.wrist_height_rel) || 0);
-    const velocities = [];
-    for (let i = 1; i < wristHeights.length; i++) {
-      velocities.push(Math.abs(wristHeights[i] - wristHeights[i - 1]));
-    }
-    velocities.unshift(0);
-
-    // 가우시안 스무딩
-    const smoothed = this._gaussianSmooth(velocities, 5);
-
-    // 임팩트 = 최대 속도
-    let impactIdx = 0;
-    let maxVel = 0;
-    for (let i = 5; i < smoothed.length - 5; i++) {
-      if (smoothed[i] > maxVel) {
-        maxVel = smoothed[i];
-        impactIdx = i;
-      }
-    }
-
-    if (maxVel < 0.005) return null; // 움직임 거의 없음
-
-    const median = [...smoothed].sort((a, b) => a - b)[Math.floor(smoothed.length / 2)];
-    const threshold = median * 0.3;
-
-    // 스윙 시작: 임팩트 역방향 탐색
-    let start = Math.max(0, impactIdx - Math.floor(fps * 0.5));
-    for (let i = impactIdx - 1; i >= 0; i--) {
-      let quietCount = 0;
-      for (let j = i; j >= Math.max(0, i - 4); j--) {
-        if (smoothed[j] < threshold) quietCount++;
-      }
-      if (quietCount >= 3) {
-        start = Math.max(0, i - 2);
-        break;
-      }
-    }
-
-    // 스윙 끝: 임팩트 순방향 탐색
-    let end = Math.min(smoothed.length - 1, impactIdx + Math.floor(fps * 1.5));
-    for (let i = impactIdx + 1; i < smoothed.length; i++) {
-      let quietCount = 0;
-      for (let j = i; j < Math.min(smoothed.length, i + 4); j++) {
-        if (smoothed[j] < threshold) quietCount++;
-      }
-      if (quietCount >= 3) {
-        end = Math.min(smoothed.length - 1, i + 2);
-        break;
-      }
-    }
-
-    return [start, end];
-  }
-
-  _gaussianSmooth(arr, window = 5) {
-    const result = new Array(arr.length);
-    const half = Math.floor(window / 2);
-    for (let i = 0; i < arr.length; i++) {
-      let sum = 0, count = 0;
-      for (let j = -half; j <= half; j++) {
-        const idx = i + j;
-        if (idx >= 0 && idx < arr.length) {
-          const w = Math.exp(-(j * j) / (2 * (half / 2) * (half / 2)));
-          sum += arr[idx] * w;
-          count += w;
-        }
-      }
-      result[i] = sum / count;
-    }
-    return result;
-  }
-
-  computePersonalBaseline(relativeMetrics) {
-    const comparison = {};
-    try {
-      const raw = localStorage.getItem('swingai_history');
-      if (!raw) return comparison;
-      const history = JSON.parse(raw);
-      if (!Array.isArray(history) || history.length === 0) return comparison;
-
-      // 이전 분석들의 keyMetrics를 수집해서 평균 계산
-      const metricSums = {};
-      const metricCounts = {};
-      for (const entry of history) {
-        if (!entry.keyMetrics) continue;
-        for (const [key, val] of Object.entries(entry.keyMetrics)) {
-          if (val == null) continue;
-          if (!metricSums[key]) { metricSums[key] = 0; metricCounts[key] = 0; }
-          metricSums[key] += val;
-          metricCounts[key]++;
-        }
-      }
-
-      const prevBaseline = {};
-      for (const key of Object.keys(metricSums)) {
-        prevBaseline[key] = metricSums[key] / metricCounts[key];
-      }
-
-      // 현재 결과와 비교
-      for (const [phase, metrics] of Object.entries(relativeMetrics)) {
-        comparison[phase] = {};
-        for (const [key, info] of Object.entries(metrics)) {
-          if (info.value == null || prevBaseline[key] == null) continue;
-          if (['unreliable', '2D_limited', 'no_baseline'].includes(info.status)) continue;
-
-          const prevAvg = prevBaseline[key];
-          const currentVal = info.value;
-          const proMean = info.pro_mean;
-
-          // 프로 평균 대비 거리가 줄었으면 개선, 늘었으면 악화
-          let direction = 'same'; // →유지
-          if (proMean != null) {
-            const prevDist = Math.abs(prevAvg - proMean);
-            const currDist = Math.abs(currentVal - proMean);
-            const diff = prevDist - currDist;
-            if (diff > 0.5) direction = 'improved';     // ↑개선
-            else if (diff < -0.5) direction = 'worsened'; // ↓악화
-          }
-
-          comparison[phase][key] = {
-            prevAvg: +prevAvg.toFixed(1),
-            direction,
-          };
-        }
-      }
-    } catch {
-      // localStorage 접근 실패 등은 무시
-    }
-    return comparison;
-  }
-
-  /**
-   * 클럽 종류 자동 감지 (개선된 다중 신호)
-   * - 최대 손목 높이, 평균 척추 각도, X-Factor, 스윙 크기 종합 판단
-   * - 드라이버/아이언/웨지 구분 정확도 향상
-   * - Gemini Vision 검증 후 결과 교체 가능
-   */
   _detectClubFromMetrics(allMetrics) {
     const wh = allMetrics.filter(m => m && m.wrist_height_rel != null).map(m => m.wrist_height_rel);
     const sa = allMetrics.filter(m => m && m.spine_angle_deg != null && m.spine_angle_deg > 0).map(m => m.spine_angle_deg);
-    const xf = allMetrics.filter(m => m && m.x_factor_deg != null).map(m => Math.abs(m.x_factor_deg));
-
     const maxWH = wh.length > 0 ? Math.max(...wh) : 0;
     const avgSA = sa.length > 0 ? sa.reduce((a, b) => a + b, 0) / sa.length : 0;
-    const maxXF = xf.length > 0 ? Math.max(...xf) : 0;
-
-    // 스윙 크기 (손목 높이 범위)
-    const minWH = wh.length > 0 ? Math.min(...wh) : 0;
-    const swingRange = maxWH - minWH;
-
-    // 점수 기반 판별 (각 클럽별 유사도)
-    let driverScore = 0;
-    let ironScore = 0;
-    let wedgeScore = 0;
-
-    // 손목 높이 기반
-    if (maxWH > 0.80) driverScore += 3;
-    else if (maxWH > 0.60) { driverScore += 1; ironScore += 2; }
-    else if (maxWH > 0.45) ironScore += 2;
-    else { ironScore += 1; wedgeScore += 2; }
-
-    // 척추 각도 기반 (드라이버는 작고, 웨지는 큼)
-    if (avgSA < 22) driverScore += 2;
-    else if (avgSA < 30) ironScore += 2;
-    else wedgeScore += 2;
-
-    // X-Factor 기반 (드라이버 > 아이언 > 웨지)
-    if (maxXF > 40) driverScore += 2;
-    else if (maxXF > 25) ironScore += 2;
-    else wedgeScore += 1;
-
-    // 스윙 크기 기반
-    if (swingRange > 0.35) driverScore += 1;
-    else if (swingRange > 0.20) ironScore += 1;
-    else wedgeScore += 1;
-
-    // 최고 점수 클럽 선택
-    if (driverScore >= ironScore && driverScore >= wedgeScore) return 'driver';
-    if (ironScore >= wedgeScore) return 'iron';
+    if (maxWH > 0.85 && avgSA < 38) return 'driver';
+    if (maxWH > 0.55 || avgSA < 40) return 'iron';
     return 'wedge';
   }
 }

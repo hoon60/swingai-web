@@ -1,22 +1,23 @@
 /**
  * SwingAI v2.0 Web — Main App
  * UI 이벤트 바인딩 + 결과 렌더링 + 레이더 차트
+ * + 3계층 학습 파이프라인 (수식 모델 -> Gemini 검증 -> TF.js 로컬 학습)
  */
 
 import { SwingPoseEngine } from './pose-engine.js';
 import { SwingAnalyzer, METRIC_NAMES_KR, CONCERN_KR } from './swing-analyzer.js';
 import { generateFeedback } from './feedback.js';
 import { GeminiVision } from './gemini-vision.js';
-import { SwingLearning } from './self-learning.js';
-
-// SwingLearning을 전역에 노출 (swing-analyzer.js에서 typeof 체크로 사용)
-window.SwingLearning = SwingLearning;
+import { saveMathResult, saveGeminiResult, getLearningStats, predictPhaseIndices, resetLearningData, exportLearningData, importLearningData } from './swing-learning.js';
+import { getTFModel } from './tf-model.js';
 
 // ─────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────
 let poseEngine = null;
 let analyzer = new SwingAnalyzer();
+let geminiVision = new GeminiVision();
+let tfModel = getTFModel();
 let currentVideoFile = null;
 let analysisResult = null;
 let activePhase = 'address';
@@ -415,18 +416,19 @@ async function runAnalysis() {
 
     analysisResult = analyzer.analyze(frames, cameraView, { club, handedness, concern });
 
-    // 자가학습: 수학 모델 결과 저장
-    try {
-      const learning = new SwingLearning();
-      if (analysisResult._phaseDetection) {
-        const pd = analysisResult._phaseDetection;
-        learning.saveConfirmedPhases(
-          cameraView, pd.totalFrames, 0, pd.topIdx, pd.impactIdx, 'math'
-        );
-      }
-    } catch (e) {
-      console.warn('[자가학습] 저장 실패:', e);
+    // ── Layer 1: 수식 모델 결과 학습 저장 ──────────────────
+    const phaseIdx = analyzer._lastPhaseIndices;
+    if (phaseIdx) {
+      const topMetrics    = frames[phaseIdx.topIdx]?.metrics    || null;
+      const impactMetrics = frames[phaseIdx.impactIdx]?.metrics || null;
+      saveMathResult(cameraView, phaseIdx.n, phaseIdx.topIdx, phaseIdx.impactIdx, topMetrics);
     }
+
+    // ── Layer 2: Gemini 백그라운드 검증 (비동기, UI 블록 없음) ──
+    _runGeminiVerification(frames, cameraView, analysisResult).catch(e => console.warn('[Gemini bg]', e.message));
+
+    // ── Layer 3: TF.js 학습 (데이터 10개 이상일 때 자동 실행) ──
+    _runTFTrainingIfReady().catch(e => console.warn('[TF bg]', e.message));
 
     // Step 3: 결과 렌더링
     els.progressStep.textContent = '4/4: 결과 생성';
@@ -439,7 +441,6 @@ async function runAnalysis() {
     saveAnalysisHistory(analysisResult);
 
     // Step 4-a: Gemini Vision 비동기 검증 (백그라운드)
-    _runGeminiVerification(els.videoPreview, analysisResult, cameraView);
 
     // Step 4-b: AI 피드백 (비동기)
     // API 키: 사용자 설정 우선, 없으면 기본 키
@@ -477,69 +478,92 @@ async function runAnalysis() {
 // ─────────────────────────────────────────────
 // Gemini Vision 비동기 검증 (백그라운드)
 // ─────────────────────────────────────────────
-async function _runGeminiVerification(videoEl, result, cameraView) {
-  try {
-    const gemini = new GeminiVision();
-    const learning = new SwingLearning();
-    const pd = result._phaseDetection;
-    const usedFrames = result._usedFrames;
+// ── 3계층 백그라운드 파이프라인 ─────────────────────────────
 
-    if (!pd || !usedFrames || usedFrames.length === 0) return;
+async function _runGeminiVerification(frames, cameraView, result) {
+  const phaseIdx = analyzer._lastPhaseIndices;
+  const topScores = analyzer._lastTopScores;
+  if (!phaseIdx) return;
 
-    // 1. 백스윙 탑 검증
-    const topResult = await gemini.verifyBackswingTop(videoEl, pd, usedFrames);
-    if (topResult && topResult.confidence >= 0.7 && topResult.frameIndex !== undefined) {
-      const geminiTopIdx = topResult.frameIndex;
-      if (Math.abs(geminiTopIdx - pd.topIdx) > 1) {
-        console.log(`[Gemini] 백스윙 탑 보정: ${pd.topIdx} → ${geminiTopIdx} (신뢰도: ${topResult.confidence})`);
-        // Gemini 확정 결과를 자가학습에 저장
-        learning.saveConfirmedPhases(
-          cameraView, pd.totalFrames, 0, geminiTopIdx, pd.impactIdx, 'gemini'
-        );
-        showToast('Gemini AI가 백스윙 탑을 보정했습니다', 3000);
-      } else {
-        // Gemini가 수학 모델과 일치 확인 → 역시 저장 (신뢰도 높음)
-        learning.saveConfirmedPhases(
-          cameraView, pd.totalFrames, 0, pd.topIdx, pd.impactIdx, 'gemini'
-        );
-      }
-    }
+  // 불확실도 체크: 낮으면 Gemini 호출 스킵
+  const uncertainty = geminiVision.computeUncertainty(phaseIdx, topScores);
+  if (uncertainty < 0.35) {
+    console.log('[Gemini] 불확실도 낮음, 스킵:', uncertainty.toFixed(2));
+    return;
+  }
 
-    // 2. 클럽 종류 검증
-    const clubResult = await gemini.verifyClub(videoEl, usedFrames);
-    if (clubResult && clubResult.confidence >= 0.7) {
-      const geminiClub = clubResult.club;
-      const mathClub = result.metadata.club;
+  const video = els.videoPreview;
+  const fps   = frames.length / (video.duration || 1);
+  const toTime = idx => (idx / frames.length) * video.duration;
 
-      if (geminiClub !== mathClub) {
-        console.log(`[Gemini] 클럽 보정: ${mathClub} → ${geminiClub} (신뢰도: ${clubResult.confidence})`);
-        // Gemini 결과 우선 → UI 업데이트
-        result.metadata.club = geminiClub;
-        const clubEl = document.getElementById('detectedClub');
-        if (clubEl) {
-          const clubNames = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' };
-          clubEl.textContent = clubNames[geminiClub] || geminiClub;
-        }
-        showToast(`클럽 감지 보정: ${geminiClub}`, 3000);
-      }
+  // 백스윙 탑 후보 5개 (topIdx 주변)
+  const { topIdx, impactIdx, n } = phaseIdx;
+  const topCandidates = [-2, -1, 0, 1, 2]
+    .map(offset => topIdx + offset)
+    .filter(i => i > 0 && i < impactIdx)
+    .map(i => toTime(i));
 
-      // 학습 데이터 저장
-      const wh = usedFrames.filter(f => f.metrics?.wrist_height_rel != null)
-        .map(f => f.metrics.wrist_height_rel);
-      const sa = usedFrames.filter(f => f.metrics?.spine_angle_deg != null && f.metrics.spine_angle_deg > 0)
-        .map(f => f.metrics.spine_angle_deg);
-      const xf = usedFrames.filter(f => f.metrics?.x_factor_deg != null)
-        .map(f => Math.abs(f.metrics.x_factor_deg));
+  const impactCandidates = [-2, -1, 0, 1, 2]
+    .map(offset => impactIdx + offset)
+    .filter(i => i > topIdx && i < n)
+    .map(i => toTime(i));
 
-      learning.saveClubDetection({
-        maxWristHeight: wh.length > 0 ? Math.max(...wh) : 0,
-        avgSpineAngle: sa.length > 0 ? sa.reduce((a, b) => a + b, 0) / sa.length : 0,
-        maxXFactor: xf.length > 0 ? Math.max(...xf) : 0,
-      }, geminiClub, 'gemini');
-    }
-  } catch (err) {
-    // Gemini 검증 실패는 무시 (수학 결과로 폴백)
-    console.warn('[Gemini 검증] 실패:', err.message);
+  // 병렬 호출
+  const [topRes, impactRes] = await Promise.all([
+    geminiVision.verifyBackswingTop(video, topCandidates, cameraView),
+    geminiVision.verifyImpact(video, impactCandidates),
+  ]);
+
+  const newTopIdx    = topRes    ? topIdx    + (topRes.confirmedIdx    - 2) : topIdx;
+  const newImpactIdx = impactRes ? impactIdx + (impactRes.confirmedIdx - 2) : impactIdx;
+
+  const topCorrected    = Math.abs(newTopIdx    - topIdx)    > 1;
+  const impactCorrected = Math.abs(newImpactIdx - impactIdx) > 1;
+  const wasCorrected    = topCorrected || impactCorrected;
+
+  const topMetrics    = frames[newTopIdx]?.metrics    || null;
+  const impactMetrics = frames[newImpactIdx]?.metrics || null;
+  saveGeminiResult(cameraView, n, newTopIdx, newImpactIdx, topMetrics, impactMetrics, wasCorrected);
+
+  if (wasCorrected) {
+    const corrections = [];
+    if (topCorrected)    corrections.push('백스윙 탑');
+    if (impactCorrected) corrections.push('임팩트');
+    showToast('AI가 ' + corrections.join('/') + ' 단계를 보정했습니다. 다음 분석에 반영됩니다.', 4000);
+    updateLearningBadge();
+  }
+}
+
+async function _runTFTrainingIfReady() {
+  if (!tfModel.isReady && !(await tfModel.loadOrInit().catch(() => false))) return;
+  const { getTFTrainingData } = await import('./swing-learning.js');
+  const data = getTFTrainingData();
+  if (!tfModel.canTrain(data)) return;
+
+  console.log('[TFModel] 학습 시작, samples:', data.length);
+  const result = await tfModel.train(data, (ep, total, loss) => {
+    if (ep === total) console.log('[TFModel] 학습 완료, loss:', loss.toFixed(5));
+  });
+  showToast('AI 모델 학습 완료 (loss: ' + result.loss.toFixed(4) + ')', 3000);
+  updateLearningBadge();
+}
+
+function updateLearningBadge() {
+  const stats = getLearningStats();
+  const badge = document.getElementById('learningBadge');
+  if (!badge) return;
+  const stageMap = { cold_start: '🌱 학습 시작', prior_only: '📊 Prior 학습', knn_warming: '🧠 K-NN 준비중', knn_active: '🚀 K-NN 활성' };
+  badge.textContent = stageMap[stats.stage] || stats.stage;
+  badge.title = '총 ' + stats.totalSwings + '회 분석 | Gemini ' + stats.geminiCalls + '회 검증 | K-NN ' + stats.knnCount + '개';
+
+  const detailEl = document.getElementById('learningDetail');
+  if (detailEl) {
+    detailEl.innerHTML =
+      '<div>총 분석: <b>' + stats.totalSwings + '회</b></div>' +
+      '<div>Gemini 검증: <b>' + stats.geminiCalls + '회</b> (보정: ' + stats.geminiCorrections + '회)</div>' +
+      '<div>K-NN 데이터: <b>' + stats.knnCount + '개</b> (Gemini확인: ' + stats.geminiKnnCount + '개)</div>' +
+      '<div>TF.js 학습: <b>' + stats.tfCount + '개</b> 라벨</div>' +
+      '<div>학습 단계: <b>' + (stageMap[stats.stage] || stats.stage) + '</b></div>';
   }
 }
 
@@ -1385,6 +1409,18 @@ function setupSettings() {
     els.settingsModal.classList.remove('visible');
   });
 
+  // 학습 현황 모달
+  $('btnLearning')?.addEventListener('click', () => {
+    updateLearningBadge();
+    $('learningModal').classList.add('visible');
+  });
+  $('btnCloseLearning')?.addEventListener('click', () => {
+    $('learningModal').classList.remove('visible');
+  });
+  $('learningModal')?.addEventListener('click', (e) => {
+    if (e.target === $('learningModal')) $('learningModal').classList.remove('visible');
+  });
+
   $('btnSaveSettings').addEventListener('click', () => {
     const key = els.inputApiKey.value.trim();
     if (key) {
@@ -1448,4 +1484,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Init engine
   initEngine();
+
+  // 학습 시스템 초기화
+  updateLearningBadge();
+  tfModel.loadOrInit().then(loaded => {
+    if (loaded) console.log('[TFModel] 기존 학습 모델 로드됨');
+  }).catch(() => {});
+
+  // 학습 데이터 내보내기/가져오기 버튼
+  document.getElementById('btnExportLearning')?.addEventListener('click', exportLearningData);
+  document.getElementById('btnImportLearning')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const result = await importLearningData(file);
+      showToast('학습 데이터 가져오기 완료: ' + result.swings + '회 분석 데이터', 3000);
+      updateLearningBadge();
+    } catch(err) { showToast('가져오기 실패: ' + err.message, 4000); }
+    e.target.value = '';
+  });
+  document.getElementById('btnResetLearning')?.addEventListener('click', () => {
+    if (confirm('모든 학습 데이터를 초기화할까요?')) { resetLearningData(); updateLearningBadge(); showToast('학습 데이터 초기화 완료'); }
+  });
 });
