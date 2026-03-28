@@ -388,6 +388,11 @@ async function runAnalysis() {
       });
     }
 
+    // 비디오 유효성 검증
+    if (!video.duration || isNaN(video.duration) || video.duration === 0) {
+      throw new Error('영상 길이를 읽을 수 없습니다. 다른 영상을 시도해주세요.');
+    }
+
     // Step 1: 포즈 분석
     els.progressStep.textContent = '2/4: 포즈 감지';
     const { startTime, endTime } = getTrimTimes();
@@ -448,9 +453,11 @@ async function runAnalysis() {
     let geminiForm = null;
     try {
       const phIdx = analyzer._lastPhaseIndices;
-      if (phIdx && geminiVision.apiKey) {
-        const video = els.videoPreview;
-        const toTime = idx => (idx / frames.length) * video.duration;
+      const video = els.videoPreview;
+      const dur = video.duration;
+      if (phIdx && phIdx.topIdx != null && phIdx.impactIdx != null
+          && geminiVision.apiKey && dur && !isNaN(dur) && dur > 0 && frames.length > 0) {
+        const toTime = idx => (idx / frames.length) * dur;
         const addrIdx = Math.max(0, (phIdx.addrEnd || 0) - 1);
         geminiForm = await geminiVision.analyzeSwingForm(
           video,
@@ -510,55 +517,41 @@ async function runAnalysis() {
 
 async function _runGeminiVerification(frames, cameraView, result) {
   const phaseIdx = analyzer._lastPhaseIndices;
-  const topScores = analyzer._lastTopScores;
-  if (!phaseIdx) return;
-
-  // 불확실도 체크: 낮으면 Gemini 호출 스킵
-  const uncertainty = geminiVision.computeUncertainty(phaseIdx, topScores);
-  if (uncertainty < 0.35) {
-    console.log('[Gemini] 불확실도 낮음, 스킵:', uncertainty.toFixed(2));
-    return;
-  }
+  if (!phaseIdx || !phaseIdx.topIdx || !phaseIdx.impactIdx) return;
+  if (!geminiVision.apiKey) return;
 
   const video = els.videoPreview;
-  const fps   = frames.length / (video.duration || 1);
-  const toTime = idx => (idx / frames.length) * video.duration;
+  const dur = video.duration;
+  if (!dur || isNaN(dur) || dur === 0) return;
+  if (!frames || frames.length === 0) return;
 
-  // 백스윙 탑 후보 5개 (topIdx 주변)
+  const toTime = idx => (idx / frames.length) * dur;
   const { topIdx, impactIdx, n } = phaseIdx;
-  const topCandidates = [-2, -1, 0, 1, 2]
+
+  // 백스윙 탑 후보 5개 캡처 후 검증
+  const candidateIndices = [-2, -1, 0, 1, 2]
     .map(offset => topIdx + offset)
-    .filter(i => i > 0 && i < impactIdx)
-    .map(i => toTime(i));
+    .filter(i => i > 0 && i < impactIdx);
 
-  const impactCandidates = [-2, -1, 0, 1, 2]
-    .map(offset => impactIdx + offset)
-    .filter(i => i > topIdx && i < n)
-    .map(i => toTime(i));
+  if (candidateIndices.length === 0) return;
 
-  // 병렬 호출
-  const [topRes, impactRes] = await Promise.all([
-    geminiVision.verifyBackswingTop(video, topCandidates, cameraView),
-    geminiVision.verifyImpact(video, impactCandidates),
-  ]);
+  try {
+    const topRes = await geminiVision.verifyBackswingTop(video, { topIdx, totalFrames: n }, frames);
+    if (!topRes || topRes.frameIndex == null) return;
 
-  const newTopIdx    = topRes    ? topIdx    + (topRes.confirmedIdx    - 2) : topIdx;
-  const newImpactIdx = impactRes ? impactIdx + (impactRes.confirmedIdx - 2) : impactIdx;
+    const newTopIdx = topRes.frameIndex;
+    const topCorrected = Math.abs(newTopIdx - topIdx) > 1;
 
-  const topCorrected    = Math.abs(newTopIdx    - topIdx)    > 1;
-  const impactCorrected = Math.abs(newImpactIdx - impactIdx) > 1;
-  const wasCorrected    = topCorrected || impactCorrected;
+    const topMetrics    = frames[newTopIdx]?.metrics    || null;
+    const impactMetrics = frames[impactIdx]?.metrics    || null;
+    saveGeminiResult(cameraView, n, newTopIdx, impactIdx, topMetrics, impactMetrics, topCorrected);
 
-  const topMetrics    = frames[newTopIdx]?.metrics    || null;
-  const impactMetrics = frames[newImpactIdx]?.metrics || null;
-  saveGeminiResult(cameraView, n, newTopIdx, newImpactIdx, topMetrics, impactMetrics, wasCorrected);
-
-  if (wasCorrected) {
-    const corrections = [];
-    if (topCorrected)    corrections.push('백스윙 탑');
-    if (impactCorrected) corrections.push('임팩트');
-    showToast('AI가 ' + corrections.join('/') + ' 단계를 보정했습니다. 다음 분석에 반영됩니다.', 4000);
-    updateLearningBadge();
+    if (topCorrected) {
+      showToast('AI가 백스윙 탑 단계를 보정했습니다. 다음 분석에 반영됩니다.', 4000);
+      updateLearningBadge();
+    }
+  } catch (e) {
+    console.warn('[Gemini Verify]', e.message);
   }
 }
 

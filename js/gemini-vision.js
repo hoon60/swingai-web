@@ -36,7 +36,7 @@ export class GeminiVision {
    * @param {Array} images - [{mime_type, data}] base64 이미지 배열
    * @returns {Object|null} 파싱된 응답 또는 null
    */
-  async _callGemini(promptText, images = []) {
+  async _callGemini(promptText, images = [], opts = {}) {
     if (!this.apiKey) return null;
 
     const parts = [{ text: promptText }];
@@ -60,8 +60,8 @@ export class GeminiVision {
         body: JSON.stringify({
           contents: [{ parts }],
           generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 500,
+            temperature: opts.temperature ?? 0.1,
+            maxOutputTokens: opts.maxTokens ?? 500,
           },
         }),
       });
@@ -107,28 +107,30 @@ export class GeminiVision {
    * @returns {Promise<string>} base64 인코딩된 이미지 데이터 (data URL 프리픽스 없음)
    */
   async _captureFrameAsBase64(video, time) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const canvas = document.createElement('canvas');
-      // 해상도를 줄여서 API 비용/속도 최적화
       const scale = Math.min(1, 640 / video.videoWidth);
       canvas.width = Math.round(video.videoWidth * scale);
       canvas.height = Math.round(video.videoHeight * scale);
 
-      const wasPlaying = !video.paused;
-      video.currentTime = time;
+      // 5초 타임아웃 — seeked 이벤트가 안 오면 실패 처리
+      const timeout = setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        reject(new Error('Frame capture timeout'));
+      }, 5000);
 
       const onSeeked = () => {
+        clearTimeout(timeout);
         video.removeEventListener('seeked', onSeeked);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // base64 추출 (data:image/jpeg;base64, 프리픽스 제거)
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         const base64 = dataUrl.split(',')[1];
         resolve(base64);
       };
 
       video.addEventListener('seeked', onSeeked);
+      video.currentTime = time;
     });
   }
 
@@ -343,7 +345,7 @@ ${frameDescriptions}
 {"observations":[{"aspect":"head_stability","aspect_kr":"머리 안정성","rating":"good 또는 caution 또는 poor","detail_kr":"평가 설명 1문장"},{"aspect":"extension","aspect_kr":"임팩트 뻗기","rating":"...","detail_kr":"..."},{"aspect":"balance","aspect_kr":"밸런스","rating":"...","detail_kr":"..."},{"aspect":"rotation_sequence","aspect_kr":"회전 순서","rating":"...","detail_kr":"..."}],"key_issue_kr":"가장 중요한 개선점 1문장"}`;
       }
 
-      const result = await this._callGemini(prompt, images);
+      const result = await this._callGemini(prompt, images, { maxTokens: 1024, temperature: 0.2 });
       if (!result || !result.observations) return null;
 
       // rating 값 정규화
