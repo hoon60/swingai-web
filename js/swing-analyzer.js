@@ -815,6 +815,24 @@ export class SwingAnalyzer {
     const detectedCount = frames.filter(f => f.landmarks !== null).length;
     const detectionRate = +((detectedCount / frames.length) * 100).toFixed(1);
 
+    // 키 프레임 랜드마크 (phase 포착 이미지용)
+    const phIdx = this._lastPhaseIndices || {};
+    const key_frame_landmarks = {};
+    const phaseFrameMap = {
+      address:       phIdx.addrEnd   != null ? Math.max(0, phIdx.addrEnd) : null,
+      backswing_top: phIdx.topIdx    != null ? phIdx.topIdx               : null,
+      impact:        phIdx.impactIdx != null ? phIdx.impactIdx             : null,
+    };
+    for (const [phaseName, idx] of Object.entries(phaseFrameMap)) {
+      if (idx == null) continue;
+      const f = frames[idx];
+      if (!f) continue;
+      key_frame_landmarks[phaseName] = {
+        time:      f.time      ?? (idx / fps),
+        landmarks: f.landmarks ?? null,
+      };
+    }
+
     return {
       metadata: {
         club: detectedClub,
@@ -832,6 +850,7 @@ export class SwingAnalyzer {
       injuries,
       user_level: userLevel,
       overall_score: overallScore,
+      key_frame_landmarks,
     };
   }
 

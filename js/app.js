@@ -825,7 +825,7 @@ function renderMetricsTable(result, phase) {
   els.metricsBody.innerHTML = rows.join('');
 
   // DTL 뷰 안내 메시지
-  const view = result.camera_view;
+  const view = result.metadata?.camera_view;
   const noteEl = document.getElementById('metricsViewNote');
   if (noteEl) {
     if (view === 'down_the_line') {
