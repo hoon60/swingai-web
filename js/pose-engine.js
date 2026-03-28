@@ -71,13 +71,15 @@ export class SwingPoseEngine {
    * @returns {Array} 프레임별 결과 [{landmarks, metrics, frameIndex, time}, ...]
    */
   async analyzeVideo(videoElement, options = {}) {
-    const { maxFrames = 90, onProgress, handedness = 'right', startTime = 0, endTime = null } = options;
+    const { maxFrames = 200, onProgress, handedness = 'right', startTime = 0, endTime = null } = options;
 
     const duration = videoElement.duration;
     const actualStart = Math.max(0, startTime);
     const actualEnd = endTime != null ? Math.min(endTime, duration) : duration;
     const segmentDuration = actualEnd - actualStart;
-    const totalFrames = Math.min(maxFrames, Math.max(30, Math.floor(segmentDuration * 30)));
+    // 최소 30fps 보장 (스윙 순간 포착을 위해), 최대 maxFrames
+    const targetFps = 30;
+    const totalFrames = Math.min(maxFrames, Math.max(30, Math.ceil(segmentDuration * targetFps)));
     const step = segmentDuration / totalFrames;
 
     const results = [];
@@ -90,7 +92,7 @@ export class SwingPoseEngine {
     for (let i = 0; i < totalFrames; i++) {
       const time = actualStart + i * step;
 
-      // Seek to frame
+      // Seek to frame (3초 타임아웃으로 hang 방지)
       videoElement.currentTime = time;
       await new Promise((resolve) => {
         const handler = () => {
@@ -98,6 +100,10 @@ export class SwingPoseEngine {
           resolve();
         };
         videoElement.addEventListener('seeked', handler);
+        setTimeout(() => {
+          videoElement.removeEventListener('seeked', handler);
+          resolve();
+        }, 3000);
       });
 
       // Draw frame to canvas

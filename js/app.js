@@ -397,7 +397,7 @@ async function runAnalysis() {
     els.progressStep.textContent = '2/4: 포즈 감지';
     const { startTime, endTime } = getTrimTimes();
     const { frames, cameraView } = await poseEngine.analyzeVideo(video, {
-      maxFrames: 90,
+      maxFrames: 200,
       handedness,
       startTime,
       endTime,
