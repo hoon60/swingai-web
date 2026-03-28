@@ -755,7 +755,7 @@ function renderMetricsTable(result, phase) {
 
   const rows = [];
   for (const [key, info] of Object.entries(relative)) {
-    if (info.status === 'no_baseline') continue;
+    if (['no_baseline', '2D_limited', 'unreliable'].includes(info.status)) continue;
     const name = METRIC_NAMES_KR[key] || key;
     const myVal = info.value != null ? (typeof info.value === 'number' ? info.value.toFixed(1) : info.value) : '-';
     const proVal = info.pro_mean != null ? info.pro_mean.toFixed(1) : '-';
@@ -798,7 +798,22 @@ function renderMetricsTable(result, phase) {
     `);
   }
 
+  if (rows.length === 0) {
+    rows.push('<tr><td colspan="6" style="text-align:center;color:#999;">분석 가능한 지표 없음</td></tr>');
+  }
   els.metricsBody.innerHTML = rows.join('');
+
+  // DTL 뷰 안내 메시지
+  const view = result.camera_view;
+  const noteEl = document.getElementById('metricsViewNote');
+  if (noteEl) {
+    if (view === 'down_the_line') {
+      noteEl.textContent = '측면(DTL) 뷰: 2D 투영 특성상 3개 지표만 신뢰도 높게 측정됩니다. 정면(Face-on) 뷰로 촬영 시 더 많은 지표를 분석할 수 있습니다.';
+      noteEl.style.display = 'block';
+    } else {
+      noteEl.style.display = 'none';
+    }
+  }
 }
 
 function renderInjuries(injuries) {

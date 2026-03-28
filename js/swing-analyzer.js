@@ -242,11 +242,16 @@ const METRIC_THRESHOLDS = {
 const DEFAULT_THRESHOLDS = [1.5, 3.0];
 
 // 카메라 뷰별 신뢰도 높은 지표
+// face_on: 2D 정면 투영에서 신뢰도 높은 지표
+//   - spine_angle: 측면 기울기 (face_on에서 측정 가능)
+//   - x_factor_deg, shoulder_turn_deg: 백스윙탑/임팩트에서 신뢰도 충분 (mean/std 검증됨)
+// down_the_line: 2D 측면 투영 한계로 3개 지표만 신뢰
+//   - shoulder_turn/x_factor는 DTL 2D에서 계산 자체가 부정확
 const RELIABLE_METRICS = {
   face_on: {
     address:        ['spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg', 'weight_dist', 'wrist_height_rel'],
-    backswing_top:  ['spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg', 'wrist_height_rel', 'weight_dist'],
-    impact:         ['spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg', 'weight_dist', 'wrist_height_rel'],
+    backswing_top:  ['spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg', 'wrist_height_rel', 'weight_dist', 'x_factor_deg', 'shoulder_turn_deg'],
+    impact:         ['spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg', 'weight_dist', 'wrist_height_rel', 'x_factor_deg', 'shoulder_turn_deg'],
   },
   down_the_line: {
     address:        ['left_arm_deg', 'left_knee_flex_deg', 'wrist_height_rel'],
