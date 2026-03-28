@@ -3,7 +3,7 @@
  * 오프라인 지원 (기본 셸 캐싱)
  */
 
-const CACHE_NAME = 'swingai-v2-cache-v10';
+const CACHE_NAME = 'swingai-v2-cache-v11';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -11,6 +11,9 @@ const PRECACHE_URLS = [
   './js/pose-engine.js',
   './js/swing-analyzer.js',
   './js/feedback.js',
+  './js/gemini-vision.js',
+  './js/swing-learning.js',
+  './js/tf-model.js',
   './manifest.json',
 ];
 
