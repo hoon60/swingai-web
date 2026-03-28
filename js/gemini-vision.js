@@ -1,6 +1,6 @@
 /**
- * SwingAI Gemini Vision Module v1.0
- * Gemini 2.0 Flash를 활용한 골프 스윙 페이즈 검증 및 클럽 판별
+ * SwingAI Gemini Vision Module v2.0
+ * Gemini 2.0 Flash를 활용한 골프 스윙 페이즈 검증, 클럽 판별, 스윙 폼 분석
  *
  * 역할:
  *   - 수학 모델이 선정한 후보 프레임을 Gemini Vision에 보내 백스윙 탑 확정
@@ -287,6 +287,78 @@ ${frameDescriptions}
    * @param {Array} usedFrames - 분석에 사용된 프레임 배열
    * @returns {Object|null} {club, confidence, comment}
    */
+  /**
+   * 스윙 폼 직접 분석 (Gemini Vision)
+   * 2D 수학으로 계산 불가능한 자세 요소를 영상에서 직접 판독
+   *
+   * @param {HTMLVideoElement} video
+   * @param {number} addressTime - 어드레스 프레임 시간(초)
+   * @param {number} topTime - 백스윙 탑 프레임 시간(초)
+   * @param {number} impactTime - 임팩트 프레임 시간(초)
+   * @param {string} cameraView - 'face_on' | 'down_the_line'
+   * @param {string} club - 'driver' | 'iron' | 'wedge' | 'putter'
+   * @returns {Object|null} {observations: [{aspect, aspect_kr, rating, detail_kr}], key_issue_kr}
+   */
+  async analyzeSwingForm(video, addressTime, topTime, impactTime, cameraView, club) {
+    try {
+      const [addrImg, topImg, impImg] = await Promise.all([
+        this._captureFrameAsBase64(video, addressTime),
+        this._captureFrameAsBase64(video, topTime),
+        this._captureFrameAsBase64(video, impactTime),
+      ]);
+
+      const images = [
+        { mime_type: 'image/jpeg', data: addrImg },
+        { mime_type: 'image/jpeg', data: topImg },
+        { mime_type: 'image/jpeg', data: impImg },
+      ];
+
+      const clubKr = { driver: '드라이버', iron: '아이언', wedge: '웨지', putter: '퍼터' }[club] || '아이언';
+      let prompt;
+
+      if (cameraView === 'down_the_line') {
+        prompt = `당신은 PGA 투어 코치 출신 골프 스윙 분석 전문가입니다.
+측면(DTL) 뷰에서 촬영된 ${clubKr} 스윙 3장(어드레스/백스윙탑/임팩트)을 분석하세요.
+
+다음 5가지 항목을 각각 평가하세요:
+1. shoulder_plane (어깨 회전 평면): 백스윙 탑에서 어깨가 충분히 회전했는지, 회전 평면이 적절한 경사인지
+2. hip_shoulder_separation (힙-어깨 분리): 다운스윙에서 힙이 어깨보다 먼저 회전하는지 (X-Factor)
+3. spine_tilt (척추 기울기): 어드레스-탑-임팩트에서 전방 기울기가 일정하게 유지되는지
+4. weight_transfer (체중 이동): 백스윙에서 오른발, 임팩트에서 왼발로 체중이 이동하는지
+5. club_shaft (클럽 샤프트): 백스윙 탑에서 샤프트가 타겟 라인과 대략 평행한지
+
+반드시 다음 JSON 형식으로 응답하세요:
+{"observations":[{"aspect":"shoulder_plane","aspect_kr":"어깨 회전","rating":"good 또는 caution 또는 poor","detail_kr":"평가 설명 1문장"},{"aspect":"hip_shoulder_separation","aspect_kr":"힙-어깨 분리","rating":"...","detail_kr":"..."},{"aspect":"spine_tilt","aspect_kr":"척추 기울기","rating":"...","detail_kr":"..."},{"aspect":"weight_transfer","aspect_kr":"체중 이동","rating":"...","detail_kr":"..."},{"aspect":"club_shaft","aspect_kr":"클럽 샤프트","rating":"...","detail_kr":"..."}],"key_issue_kr":"가장 중요한 개선점 1문장"}`;
+      } else {
+        prompt = `당신은 PGA 투어 코치 출신 골프 스윙 분석 전문가입니다.
+정면(Face-on) 뷰에서 촬영된 ${clubKr} 스윙 3장(어드레스/백스윙탑/임팩트)을 분석하세요.
+
+다음 4가지 항목을 각각 평가하세요:
+1. head_stability (머리 안정성): 스윙 전체에서 머리 위치가 크게 움직이지 않는지
+2. extension (임팩트 익스텐션): 임팩트에서 양팔이 충분히 뻗어 있는지, 타겟 방향으로 클럽이 뻗는지
+3. balance (밸런스): 어드레스와 임팩트에서 몸의 균형이 잡혀 있는지
+4. rotation_sequence (회전 순서): 백스윙/다운스윙에서 몸의 회전이 자연스러운지
+
+반드시 다음 JSON 형식으로 응답하세요:
+{"observations":[{"aspect":"head_stability","aspect_kr":"머리 안정성","rating":"good 또는 caution 또는 poor","detail_kr":"평가 설명 1문장"},{"aspect":"extension","aspect_kr":"임팩트 뻗기","rating":"...","detail_kr":"..."},{"aspect":"balance","aspect_kr":"밸런스","rating":"...","detail_kr":"..."},{"aspect":"rotation_sequence","aspect_kr":"회전 순서","rating":"...","detail_kr":"..."}],"key_issue_kr":"가장 중요한 개선점 1문장"}`;
+      }
+
+      const result = await this._callGemini(prompt, images);
+      if (!result || !result.observations) return null;
+
+      // rating 값 정규화
+      const validRatings = ['good', 'caution', 'poor'];
+      for (const obs of result.observations) {
+        if (!validRatings.includes(obs.rating)) obs.rating = 'caution';
+      }
+
+      return result;
+    } catch (err) {
+      console.warn('[GeminiVision] analyzeSwingForm 실패:', err.message);
+      return null;
+    }
+  }
+
   async verifyClub(video, usedFrames) {
     if (!usedFrames || usedFrames.length === 0) return null;
 

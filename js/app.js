@@ -440,16 +440,43 @@ async function runAnalysis() {
     // 히스토리 저장
     saveAnalysisHistory(analysisResult);
 
-    // Step 4-a: Gemini Vision 비동기 검증 (백그라운드)
+    // Step 4-a: Gemini Vision 스윙 폼 분석 (Groq 피드백 전에 완료)
+    els.feedbackLoading.style.display = 'block';
+    els.feedbackText.textContent = 'AI 영상 분석 중...';
+    els.feedbackNoKey.style.display = 'none';
 
-    // Step 4-b: AI 피드백 (비동기)
-    // API 키: 사용자 설정 우선, 없으면 기본 키
+    let geminiForm = null;
+    try {
+      const phIdx = analyzer._lastPhaseIndices;
+      if (phIdx && geminiVision.apiKey) {
+        const video = els.videoPreview;
+        const toTime = idx => (idx / frames.length) * video.duration;
+        const addrIdx = Math.max(0, (phIdx.addrEnd || 0) - 1);
+        geminiForm = await geminiVision.analyzeSwingForm(
+          video,
+          toTime(addrIdx),
+          toTime(phIdx.topIdx),
+          toTime(phIdx.impactIdx),
+          cameraView,
+          club
+        );
+        if (geminiForm) {
+          console.log('[Gemini Form]', geminiForm.key_issue_kr || '분석 완료');
+        }
+      }
+    } catch (e) {
+      console.warn('[Gemini Form]', e.message);
+    }
+    analysisResult.gemini_form = geminiForm;
+
+    // Gemini 관찰로 레이더 차트 업데이트
+    renderRadarChart(analysisResult);
+
+    // Step 4-b: AI 피드백 (Groq LLM)
+    els.feedbackText.textContent = 'AI 피드백 생성 중...';
     const _k = [77,89,65,117,108,65,92,73,115,70,110,125,102,109,127,115,111,96,127,28,114,66,65,124,125,109,78,83,72,25,108,115,126,83,109,29,28,110,91,93,72,82,104,70,70,18,71,77,99,88,28,127,27,88,92,25];
     const apiKey = localStorage.getItem('groq_api_key') || _k.map(c => String.fromCharCode(c ^ 42)).join('');
     if (apiKey) {
-      els.feedbackLoading.style.display = 'block';
-      els.feedbackText.textContent = '';
-      els.feedbackNoKey.style.display = 'none';
       try {
         const feedback = await generateFeedback(analysisResult, { apiKey, concern });
         els.feedbackText.innerHTML = formatFeedback(feedback);
@@ -460,6 +487,7 @@ async function runAnalysis() {
     } else {
       els.feedbackNoKey.style.display = 'block';
       els.feedbackText.textContent = '';
+      els.feedbackLoading.style.display = 'none';
     }
 
     setTimeout(() => {
@@ -845,22 +873,36 @@ function renderRadarChart(result) {
 
   ctx.clearRect(0, 0, W, H);
 
-  // 데이터 수집 (backswing_top 기준)
+  // 데이터 수집 (backswing_top 기준) — 뷰에 따라 축 동적 결정
   const phase = result.relative_metrics.backswing_top || result.relative_metrics.address || {};
   const metrics = [];
-  const metricKeys = [
-    'spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg',
-    'x_factor_deg', 'shoulder_turn_deg', 'wrist_height_rel',
-  ];
+  const view = result.metadata?.camera_view;
+
+  let metricKeys;
+  if (view === 'down_the_line') {
+    metricKeys = ['left_arm_deg', 'left_knee_flex_deg', 'wrist_height_rel'];
+  } else {
+    metricKeys = [
+      'spine_angle_deg', 'left_arm_deg', 'left_knee_flex_deg',
+      'x_factor_deg', 'shoulder_turn_deg', 'wrist_height_rel',
+    ];
+  }
 
   for (const key of metricKeys) {
     const info = phase[key];
     if (!info || info.z_score == null || ['unreliable', '2D_limited', 'no_baseline'].includes(info.status)) {
       metrics.push({ label: METRIC_NAMES_KR[key] || key, score: 0.5 });
     } else {
-      // z-score 0 = 1.0 (프로 수준), z-score 3+ = 0
       const score = Math.max(0, Math.min(1, 1 - Math.abs(info.z_score) / 3));
       metrics.push({ label: METRIC_NAMES_KR[key] || key, score });
+    }
+  }
+
+  // DTL: Gemini Vision 관찰 결과를 레이더 축에 추가
+  if (view === 'down_the_line' && result.gemini_form?.observations) {
+    for (const obs of result.gemini_form.observations) {
+      const score = obs.rating === 'good' ? 0.85 : obs.rating === 'caution' ? 0.5 : 0.15;
+      metrics.push({ label: obs.aspect_kr || obs.aspect, score });
     }
   }
 

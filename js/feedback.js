@@ -9,6 +9,9 @@ import { CONCERN_KR, METRIC_NAMES_KR } from './swing-analyzer.js';
 // ─────────────────────────────────────────────
 // 고민별 시스템 프롬프트
 // ─────────────────────────────────────────────
+// DTL에서 신뢰 가능한 3개 지표
+const DTL_RELIABLE = ['left_arm_deg', 'left_knee_flex_deg', 'wrist_height_rel'];
+
 const CONCERN_CONFIG = {
   distance: {
     system_prompt: (
@@ -18,6 +21,7 @@ const CONCERN_CONFIG = {
       "참조 선수: 로리 맥길로이 (X-Factor 68도, 어깨 118도), 타이거 우즈 (X-Factor 72도)."
     ),
     focus: ['x_factor_deg', 'shoulder_turn_deg', 'wrist_height_rel', 'left_knee_flex_deg', 'weight_dist'],
+    focus_dtl: DTL_RELIABLE,
   },
   slice: {
     system_prompt: (
@@ -26,7 +30,8 @@ const CONCERN_CONFIG = {
       "슬라이스의 원인(아웃-인 스윙 경로, 오픈 페이스 등)을 데이터로 진단하고 교정 방법을 제시하세요. " +
       "참조 선수: 존 람 (짧은 백스윙, 강한 그립, 드로어)."
     ),
-    focus: ['shoulder_line_tilt_deg', 'hip_line_tilt_deg', 'lateral_bend_deg', 'weight_dist', 'x_factor_deg'],
+    focus: ['x_factor_deg', 'weight_dist', 'spine_angle_deg', 'left_arm_deg', 'wrist_height_rel'],
+    focus_dtl: DTL_RELIABLE,
   },
   hook: {
     system_prompt: (
@@ -34,7 +39,8 @@ const CONCERN_CONFIG = {
       "이 골퍼의 최대 고민은 '훅 교정'입니다. " +
       "훅의 원인(인-아웃 과다, 닫힌 페이스 등)을 데이터로 진단하고 교정 방법을 제시하세요."
     ),
-    focus: ['lateral_bend_deg', 'shoulder_line_tilt_deg', 'hip_line_tilt_deg', 'weight_dist', 'left_arm_deg'],
+    focus: ['left_arm_deg', 'weight_dist', 'x_factor_deg', 'spine_angle_deg', 'wrist_height_rel'],
+    focus_dtl: DTL_RELIABLE,
   },
   accuracy: {
     system_prompt: (
@@ -42,7 +48,8 @@ const CONCERN_CONFIG = {
       "이 골퍼의 최대 고민은 '방향성 개선'입니다. " +
       "일관된 방향성을 위한 어드레스, 백스윙, 임팩트 포지션을 분석하고 개선점을 제시하세요."
     ),
-    focus: ['shoulder_line_tilt_deg', 'spine_angle_deg', 'hip_line_tilt_deg', 'left_arm_deg', 'weight_dist'],
+    focus: ['spine_angle_deg', 'left_arm_deg', 'weight_dist', 'x_factor_deg', 'shoulder_turn_deg'],
+    focus_dtl: DTL_RELIABLE,
   },
   iron_contact: {
     system_prompt: (
@@ -50,7 +57,8 @@ const CONCERN_CONFIG = {
       "이 골퍼의 최대 고민은 '아이언 미스샷(뒤땅, 탑핑)'입니다. " +
       "볼 컨택 품질을 높이기 위한 어드레스, 척추 각도, 체중 이동을 분석하세요."
     ),
-    focus: ['spine_angle_deg', 'left_arm_deg', 'weight_dist', 'left_knee_flex_deg', 'lateral_bend_deg'],
+    focus: ['spine_angle_deg', 'left_arm_deg', 'weight_dist', 'left_knee_flex_deg', 'wrist_height_rel'],
+    focus_dtl: DTL_RELIABLE,
   },
   short_game: {
     system_prompt: (
@@ -59,6 +67,7 @@ const CONCERN_CONFIG = {
       "짧은 스윙에서의 팔 직선도, 손목 높이, 척추 각도를 분석하세요."
     ),
     focus: ['left_arm_deg', 'wrist_height_rel', 'spine_angle_deg', 'weight_dist', 'shoulder_turn_deg'],
+    focus_dtl: DTL_RELIABLE,
   },
   putting: {
     system_prompt: (
@@ -66,7 +75,8 @@ const CONCERN_CONFIG = {
       "이 골퍼의 최대 고민은 '퍼팅'입니다. " +
       "퍼팅 스트로크의 일관성, 어깨 라인, 척추 각도를 분석하세요."
     ),
-    focus: ['spine_angle_deg', 'shoulder_line_tilt_deg', 'left_arm_deg', 'weight_dist', 'shoulder_turn_deg'],
+    focus: ['spine_angle_deg', 'left_arm_deg', 'weight_dist', 'left_knee_flex_deg', 'shoulder_turn_deg'],
+    focus_dtl: DTL_RELIABLE,
   },
   consistency: {
     system_prompt: (
@@ -75,6 +85,7 @@ const CONCERN_CONFIG = {
       "프레임별 지표의 표준편차(std)를 분석하여 일관성이 부족한 부분을 찾고 조언하세요."
     ),
     focus: ['spine_angle_deg', 'x_factor_deg', 'left_arm_deg', 'left_knee_flex_deg'],
+    focus_dtl: DTL_RELIABLE,
   },
 };
 
@@ -178,7 +189,9 @@ function buildFeedbackStyleSection() {
  */
 function buildUserPrompt(analysisResult, concern) {
   const config = CONCERN_CONFIG[concern] || CONCERN_CONFIG.distance;
-  const focus = config.focus;
+  const cameraView = analysisResult.metadata?.camera_view || 'face_on';
+  const isDTL = cameraView === 'down_the_line';
+  const focus = isDTL ? (config.focus_dtl || config.focus) : config.focus;
   const parts = [];
 
   // 히스토리 섹션 추가
@@ -236,6 +249,24 @@ function buildUserPrompt(analysisResult, concern) {
     parts.push('');
   }
 
+  // Gemini Vision 관찰 결과 (있는 경우)
+  const geminiForm = analysisResult.gemini_form;
+  if (geminiForm && geminiForm.observations) {
+    parts.push('## Gemini Vision 관찰 (AI 영상 판독)');
+    for (const obs of geminiForm.observations) {
+      const ratingKr = { good: '양호', caution: '주의', poor: '미흡' }[obs.rating] || obs.rating;
+      parts.push(`- ${obs.aspect_kr || obs.aspect}: [${ratingKr}] ${obs.detail_kr || ''}`);
+    }
+    if (geminiForm.key_issue_kr) {
+      parts.push(`- **핵심 이슈**: ${geminiForm.key_issue_kr}`);
+    }
+    parts.push('');
+    if (isDTL) {
+      parts.push('※ 측면(DTL) 뷰에서 수치 분석이 제한적이므로, 위 Vision 관찰 결과를 중심으로 피드백하세요.');
+      parts.push('');
+    }
+  }
+
   // 요청
   parts.push('## 요청');
   parts.push('위 데이터를 분석하여 다음 형식으로 답변해주세요:');
@@ -272,10 +303,20 @@ export async function generateFeedback(analysisResult, options = {}) {
 
   const config = CONCERN_CONFIG[concern] || CONCERN_CONFIG.distance;
   const level = analysisResult.user_level?.level || 'intermediate';
+  const cameraView = analysisResult.metadata?.camera_view || 'face_on';
 
   // 시스템 프롬프트 조합
   let systemPrompt = config.system_prompt;
   systemPrompt += '\n답변은 한국어로, 아마추어 골퍼가 이해하기 쉽게 작성하세요.';
+
+  // DTL 뷰 제한 안내
+  if (cameraView === 'down_the_line') {
+    systemPrompt += '\n\n[DTL 뷰 제한] 이 영상은 측면(DTL) 뷰입니다. ' +
+      '어깨 회전, X-Factor, 체중 분배, 어깨/힙 기울기는 수치로 측정할 수 없습니다. ' +
+      '팔 직선도, 무릎 각도, 손목 높이 수치와 Gemini Vision 관찰 결과를 중심으로 피드백하세요. ' +
+      '수치가 없는 항목은 Vision 관찰을 참조하되, 구체적 수치를 만들어내지 마세요.';
+  }
+
   systemPrompt += LEVEL_INSTRUCTION[level] || LEVEL_INSTRUCTION.intermediate;
   systemPrompt += buildFeedbackStyleSection();
 
