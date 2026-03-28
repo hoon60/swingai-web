@@ -15,72 +15,72 @@ export const BASELINES = {
   down_the_line: {
     driver: {
       address: {
-        spine_angle_deg:        { mean: 19.4,  std: 3.0 },
-        left_knee_flex_deg:     { mean: 167.3, std: 2.0 },
-        left_arm_deg:           { mean: 171.0, std: 4.0 },
+        spine_angle_deg:        { mean: 19.4,  std: 6.0 },
+        left_knee_flex_deg:     { mean: 167.3, std: 8.0 },
+        left_arm_deg:           { mean: 171.0, std: 8.0 },
         x_factor_deg:           { mean: 0.0,   std: 5.0 },
         shoulder_turn_deg:      { mean: 0.0,   std: 5.0 },
         shoulder_line_tilt_deg: { mean: 0.0,   std: 30.0 },
         hip_line_tilt_deg:      { mean: 0.0,   std: 26.0 },
         lateral_bend_deg:       { mean: 19.4,  std: 12.0 },
-        wrist_height_rel:       { mean: 0.44,  std: 0.05 },
+        wrist_height_rel:       { mean: 0.44,  std: 0.08 },
       },
       backswing_top: {
-        spine_angle_deg:        { mean: 18.7,  std: 4.0 },
-        left_knee_flex_deg:     { mean: 173.3, std: 3.0 },
-        left_arm_deg:           { mean: 177.6, std: 2.0 },
+        spine_angle_deg:        { mean: 18.7,  std: 6.0 },
+        left_knee_flex_deg:     { mean: 173.3, std: 8.0 },
+        left_arm_deg:           { mean: 177.6, std: 8.0 },
         shoulder_turn_deg:      { mean: 4.0,   std: 6.0 },
         x_factor_deg:           { mean: 10.0,  std: 27.0 },
-        wrist_height_rel:       { mean: 0.47,  std: 0.03 },
+        wrist_height_rel:       { mean: 0.47,  std: 0.08 },
         shoulder_line_tilt_deg: { mean: 13.0,  std: 31.0 },
         hip_line_tilt_deg:      { mean: 16.0,  std: 20.0 },
         lateral_bend_deg:       { mean: 18.7,  std: 8.0 },
       },
       impact: {
-        spine_angle_deg:        { mean: 18.5,  std: 3.0 },
-        left_arm_deg:           { mean: 173.0, std: 5.0 },
-        left_knee_flex_deg:     { mean: 165.0, std: 7.0 },
+        spine_angle_deg:        { mean: 18.5,  std: 6.0 },
+        left_arm_deg:           { mean: 173.0, std: 8.0 },
+        left_knee_flex_deg:     { mean: 165.0, std: 8.0 },
         shoulder_line_tilt_deg: { mean: -5.0,  std: 43.0 },
         hip_line_tilt_deg:      { mean: 11.0,  std: 34.0 },
         lateral_bend_deg:       { mean: 18.5,  std: 11.0 },
         x_factor_deg:           { mean: 19.0,  std: 14.0 },
         shoulder_turn_deg:      { mean: 17.0,  std: 24.0 },
-        wrist_height_rel:       { mean: 0.39,  std: 0.06 },
+        wrist_height_rel:       { mean: 0.39,  std: 0.08 },
       },
     },
     iron: {
       address: {
-        spine_angle_deg:        { mean: 21.0,  std: 3.0 },
-        left_knee_flex_deg:     { mean: 176.0, std: 3.0 },
-        left_arm_deg:           { mean: 177.0, std: 2.0 },
-        x_factor_deg:           { mean: 0.0,   std: 2.0 },
-        shoulder_turn_deg:      { mean: 0.0,   std: 2.0 },
+        spine_angle_deg:        { mean: 21.0,  std: 6.0 },
+        left_knee_flex_deg:     { mean: 176.0, std: 8.0 },
+        left_arm_deg:           { mean: 177.0, std: 8.0 },
+        x_factor_deg:           { mean: 0.0,   std: 5.0 },
+        shoulder_turn_deg:      { mean: 0.0,   std: 5.0 },
         shoulder_line_tilt_deg: { mean: 0.0,   std: 3.0 },
         hip_line_tilt_deg:      { mean: 0.0,   std: 2.0 },
         lateral_bend_deg:       { mean: 3.0,   std: 3.0 },
         wrist_height_rel:       { mean: 0.42,  std: 0.08 },
       },
       backswing_top: {
-        spine_angle_deg:        { mean: 20.0,  std: 4.0 },
-        left_knee_flex_deg:     { mean: 173.3, std: 3.0 },
-        left_arm_deg:           { mean: 177.6, std: 2.0 },
+        spine_angle_deg:        { mean: 20.0,  std: 6.0 },
+        left_knee_flex_deg:     { mean: 173.3, std: 8.0 },
+        left_arm_deg:           { mean: 177.6, std: 8.0 },
         shoulder_turn_deg:      { mean: 4.0,   std: 6.0 },
         x_factor_deg:           { mean: 10.0,  std: 27.0 },
-        wrist_height_rel:       { mean: 0.45,  std: 0.04 },
+        wrist_height_rel:       { mean: 0.45,  std: 0.08 },
         shoulder_line_tilt_deg: { mean: 13.0,  std: 31.0 },
         hip_line_tilt_deg:      { mean: 16.0,  std: 20.0 },
         lateral_bend_deg:       { mean: 20.0,  std: 8.0 },
       },
       impact: {
-        spine_angle_deg:        { mean: 20.0,  std: 3.0 },
-        left_arm_deg:           { mean: 173.0, std: 5.0 },
-        left_knee_flex_deg:     { mean: 165.0, std: 7.0 },
+        spine_angle_deg:        { mean: 20.0,  std: 6.0 },
+        left_arm_deg:           { mean: 173.0, std: 8.0 },
+        left_knee_flex_deg:     { mean: 165.0, std: 8.0 },
         shoulder_line_tilt_deg: { mean: -5.0,  std: 43.0 },
         hip_line_tilt_deg:      { mean: 11.0,  std: 34.0 },
         lateral_bend_deg:       { mean: 20.0,  std: 11.0 },
         x_factor_deg:           { mean: 19.0,  std: 14.0 },
         shoulder_turn_deg:      { mean: 17.0,  std: 24.0 },
-        wrist_height_rel:       { mean: 0.38,  std: 0.06 },
+        wrist_height_rel:       { mean: 0.38,  std: 0.08 },
       },
     },
     wedge: {
@@ -339,9 +339,10 @@ export class SwingAnalyzer {
    *           + shoulderRate(0.15) + framePrior(0.10)
    *   impact: wristReturn(0.35) + xFactorDrop(0.35) + wristDropSpeed(0.30)
    */
-  classifyPhases(allMetrics, fps = 30) {
+  classifyPhases(allMetrics, fps = 30, cameraView = 'face_on') {
     const n = allMetrics.length;
     if (n === 0) return [];
+    const isDTL = cameraView === 'down_the_line';
 
     // ── 시그널 추출 ──────────────────────────────
     const wh  = allMetrics.map(m => (m && m.wrist_height_rel  != null) ? m.wrist_height_rel  : null);
@@ -433,11 +434,15 @@ export class SwingAnalyzer {
     );
     const whDown = normalize(whDownRaw, impSearchStart, impSearchEnd);
 
+    // DTL: x_factor 노이즈 → wrist 복귀/하강 가중치 증가
+    const impW = isDTL
+      ? { ret: 0.45, xf: 0.10, down: 0.45 }
+      : { ret: 0.35, xf: 0.35, down: 0.30 };
     for (let i = impSearchStart; i < impSearchEnd; i++) {
       impactScores[i] =
-        whReturn[i] * 0.35 +
-        xfDropNorm[i] * 0.35 +
-        whDown[i] * 0.30;
+        whReturn[i]  * impW.ret +
+        xfDropNorm[i] * impW.xf +
+        whDown[i]    * impW.down;
     }
 
     // 임팩트 = 스코어 최대 지점
@@ -481,13 +486,17 @@ export class SwingAnalyzer {
     });
     const framePriorNorm = normalize(framePrior, topSearchStart, topSearchEnd);
 
+    // DTL: x_factor/shoulder_turn 노이즈 → wrist 신호 가중치 증가
+    const topW = isDTL
+      ? { wh: 0.35, vel: 0.40, xf: 0.05, sht: 0.05, prior: 0.15 }
+      : { wh: 0.20, vel: 0.30, xf: 0.25, sht: 0.15, prior: 0.10 };
     for (let i = topSearchStart; i < topSearchEnd; i++) {
       topScores[i] =
-        whTopNorm[i]    * 0.20 +
-        whVelNorm[i]    * 0.30 +
-        xfRateNorm[i]   * 0.25 +
-        shtRateNorm[i]  * 0.15 +
-        framePriorNorm[i] * 0.10;
+        whTopNorm[i]       * topW.wh +
+        whVelNorm[i]       * topW.vel +
+        xfRateNorm[i]      * topW.xf +
+        shtRateNorm[i]     * topW.sht +
+        framePriorNorm[i]  * topW.prior;
     }
 
     // 백스윙 탑 = 스코어 최대 지점
@@ -780,11 +789,13 @@ export class SwingAnalyzer {
     const fps = 30;
 
     const allMetrics = frames.map(f => f.metrics);
-    const detectedClub = frames[0]?.metrics ?
-      this._detectClubFromMetrics(allMetrics) : club;
+    // 유저가 직접 선택한 클럽을 우선 사용, 'auto'이거나 미지정 시 자동 감지
+    const detectedClub = (club && club !== 'auto')
+      ? club
+      : (frames[0]?.metrics ? this._detectClubFromMetrics(allMetrics) : 'driver');
 
-    // 단계 분류
-    const phases = this.classifyPhases(allMetrics, fps);
+    // 단계 분류 (DTL 뷰에서는 wrist 기반 가중치 사용)
+    const phases = this.classifyPhases(allMetrics, fps, cameraView);
 
     // 템포 분석
     const tempo = this.computeTempo(phases, fps);
