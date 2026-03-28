@@ -3,11 +3,13 @@
  * Python pose_engine.py의 classify_phases, compute_tempo, to_relative,
  * check_injury_risks, aggregate_phase_metrics를 JS로 이식
  *
- * 프로 기준값(BASELINES)은 v4.0 MediaPipe 2D 실측값 기반
+ * 프로 기준값(BASELINES)은 v5.0 ML 파이프라인 기반
+ * - face_on x_factor/shoulder_turn/left_arm: 8명 PGA 프로 MediaPipe 분석 (n=8, IQR 이상치 제거)
+ * - DTL/기타: v4.0 MediaPipe 2D 실측값 유지
  */
 
 // ─────────────────────────────────────────────
-// Pro Baselines DB (v4.1 — 2026-03-26 MediaPipe 2D 실측값)
+// Pro Baselines DB (v5.0 — 2026-03-28 ML 파이프라인 + 2D 실측 혼합)
 // ─────────────────────────────────────────────
 export const BASELINES = {
   down_the_line: {
@@ -139,40 +141,40 @@ export const BASELINES = {
       },
       backswing_top: {
         spine_angle_deg: { mean: 6.2, std: 3.0 }, left_knee_flex_deg: { mean: 175.0, std: 7.0 },
-        left_arm_deg: { mean: 173.3, std: 6.0 }, shoulder_turn_deg: { mean: 89.0, std: 8.0 },
-        x_factor_deg: { mean: 46.0, std: 5.0 }, weight_dist: { mean: 0.50, std: 0.05 },
+        left_arm_deg: { mean: 173.3, std: 6.0 }, shoulder_turn_deg: { mean: 88.0, std: 5.0 },
+        x_factor_deg: { mean: 46.0, std: 4.0 }, weight_dist: { mean: 0.50, std: 0.05 },
         wrist_height_rel: { mean: 0.43, std: 0.08 }, shoulder_line_tilt_deg: { mean: -10.0, std: 15.0 },
         hip_line_tilt_deg: { mean: -2.0, std: 8.0 }, lateral_bend_deg: { mean: 5.0, std: 4.0 },
       },
       impact: {
-        spine_angle_deg: { mean: 6.4, std: 4.0 }, left_arm_deg: { mean: 174.0, std: 8.0 },
+        spine_angle_deg: { mean: 6.4, std: 4.0 }, left_arm_deg: { mean: 172.0, std: 10.0 },
         left_knee_flex_deg: { mean: 178.0, std: 2.0 }, shoulder_line_tilt_deg: { mean: -5.0, std: 12.0 },
         hip_line_tilt_deg: { mean: -3.0, std: 8.0 }, lateral_bend_deg: { mean: 4.0, std: 4.0 },
-        weight_dist: { mean: 0.50, std: 0.05 }, x_factor_deg: { mean: 25.0, std: 6.0 },
-        shoulder_turn_deg: { mean: 35.0, std: 6.0 }, wrist_height_rel: { mean: 0.42, std: 0.08 },
+        weight_dist: { mean: 0.50, std: 0.05 }, x_factor_deg: { mean: 28.0, std: 4.0 },
+        shoulder_turn_deg: { mean: 38.0, std: 4.0 }, wrist_height_rel: { mean: 0.42, std: 0.08 },
       },
     },
     iron: {
       address: {
         spine_angle_deg: { mean: 5.0, std: 1.5 }, left_knee_flex_deg: { mean: 178.5, std: 2.0 },
-        left_arm_deg: { mean: 177.0, std: 2.0 }, weight_dist: { mean: 0.52, std: 0.03 },
+        left_arm_deg: { mean: 172.0, std: 6.0 }, weight_dist: { mean: 0.52, std: 0.03 },
         x_factor_deg: { mean: 0.0, std: 2.0 }, shoulder_turn_deg: { mean: 0.0, std: 2.0 },
         shoulder_line_tilt_deg: { mean: 0.0, std: 15.0 }, hip_line_tilt_deg: { mean: 0.0, std: 8.0 },
         lateral_bend_deg: { mean: 2.0, std: 3.0 }, wrist_height_rel: { mean: 0.40, std: 0.08 },
       },
       backswing_top: {
         spine_angle_deg: { mean: 5.0, std: 1.5 }, left_knee_flex_deg: { mean: 178.0, std: 2.5 },
-        left_arm_deg: { mean: 176.0, std: 3.0 }, shoulder_turn_deg: { mean: 90.0, std: 7.0 },
+        left_arm_deg: { mean: 175.0, std: 6.0 }, shoulder_turn_deg: { mean: 90.0, std: 7.0 },
         x_factor_deg: { mean: 45.0, std: 5.0 }, weight_dist: { mean: 0.52, std: 0.05 },
         wrist_height_rel: { mean: 0.42, std: 0.08 }, shoulder_line_tilt_deg: { mean: -10.0, std: 15.0 },
         hip_line_tilt_deg: { mean: -2.0, std: 8.0 }, lateral_bend_deg: { mean: 5.0, std: 4.0 },
       },
       impact: {
-        spine_angle_deg: { mean: 5.0, std: 1.5 }, left_arm_deg: { mean: 177.5, std: 2.0 },
+        spine_angle_deg: { mean: 5.0, std: 1.5 }, left_arm_deg: { mean: 172.0, std: 5.0 },
         left_knee_flex_deg: { mean: 178.0, std: 2.0 }, shoulder_line_tilt_deg: { mean: -5.0, std: 12.0 },
         hip_line_tilt_deg: { mean: -3.0, std: 8.0 }, lateral_bend_deg: { mean: 4.0, std: 4.0 },
-        weight_dist: { mean: 0.78, std: 0.05 }, x_factor_deg: { mean: 22.0, std: 6.0 },
-        shoulder_turn_deg: { mean: 33.0, std: 6.0 }, wrist_height_rel: { mean: 0.38, std: 0.08 },
+        weight_dist: { mean: 0.78, std: 0.05 }, x_factor_deg: { mean: 30.0, std: 4.0 },
+        shoulder_turn_deg: { mean: 40.0, std: 4.0 }, wrist_height_rel: { mean: 0.38, std: 0.08 },
       },
     },
     wedge: {
