@@ -49,7 +49,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell — cache first, fallback to network
+  // JS/HTML files — network first, fallback to cache (ensures fresh code)
+  const isAppFile = url.pathname.endsWith('.js') || url.pathname.endsWith('.html') || url.pathname.endsWith('/');
+  if (isAppFile) {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Other assets (images, manifests) — cache first, fallback to network
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
